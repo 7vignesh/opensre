@@ -82,6 +82,9 @@ dev = [
     "types-PyYAML",
     "boto3-stubs[essential]",
 ]
+kafka = [
+    "confluent-kafka>=2.3.0",
+]
 clickhouse = [
     "clickhouse-connect>=0.8.0",
 ]
