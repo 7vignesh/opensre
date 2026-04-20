@@ -257,16 +257,20 @@ def _map_betterstack_logs(data: dict) -> dict:
 
 def _map_diagnostic_code_result(data: dict, current_evidence: dict) -> dict:
     executions = list(current_evidence.get("diagnostic_executions", []))
-    executions.append({
-        "code": data.get("code", ""),
-        "inputs": data.get("inputs", {}),
-        "stdout": data.get("stdout", ""),
-        "stderr": data.get("stderr", ""),
-        "exit_code": data.get("exit_code"),
-        "timed_out": data.get("timed_out", False),
-        "success": data.get("success", False),
-    })
+    executions.append(
+        {
+            "code": data.get("code", ""),
+            "inputs": data.get("inputs", {}),
+            "stdout": data.get("stdout", ""),
+            "stderr": data.get("stderr", ""),
+            "exit_code": data.get("exit_code"),
+            "timed_out": data.get("timed_out", False),
+            "success": data.get("success", False),
+        }
+    )
     return {"diagnostic_executions": executions}
+
+
 def _map_vercel_deployment_status(data: dict) -> dict:
     return {
         "vercel_deployments": data.get("deployments", []),
@@ -535,9 +539,7 @@ def build_evidence_summary(execution_results: dict[str, ActionExecutionResult]) 
                 failing = len(data.get("failing_pods", []))
                 summary_parts.append(f"eks:{data.get('total_pods', 0)} pods ({failing} failing)")
             elif action_name == "get_eks_events" and data.get("warning_events") is not None:
-                summary_parts.append(
-                    f"eks:{data.get('total_warning_count', 0)} warning events"
-                )
+                summary_parts.append(f"eks:{data.get('total_warning_count', 0)} warning events")
             elif action_name == "list_eks_deployments" and data.get("deployments") is not None:
                 degraded = len(data.get("degraded_deployments", []))
                 summary_parts.append(
@@ -578,8 +580,7 @@ def build_evidence_summary(execution_results: dict[str, ActionExecutionResult]) 
             elif action_name == "query_betterstack_logs" and data.get("rows"):
                 bs_source = str(data.get("betterstack_source", "")).strip() or "?"
                 summary_parts.append(
-                    f"betterstack:{data.get('row_count', len(data['rows']))} rows "
-                    f"from {bs_source}"
+                    f"betterstack:{data.get('row_count', len(data['rows']))} rows from {bs_source}"
                 )
             elif action_name == "run_diagnostic_code":
                 if data.get("success"):
@@ -655,9 +656,7 @@ def summarize_execution_results(
 
     # Only successes go into executed_hypotheses: planning filters out any name seen there,
     # so recording failures would block retries for transient errors on any tool.
-    successful_actions = [
-        name for name, result in execution_results.items() if result.success
-    ]
+    successful_actions = [name for name, result in execution_results.items() if result.success]
     if successful_actions:
         executed_hypotheses = track_hypothesis(
             executed_hypotheses,

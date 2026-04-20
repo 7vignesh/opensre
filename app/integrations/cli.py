@@ -304,9 +304,7 @@ def _setup_betterstack() -> None:
     query_endpoint = _p(
         "Better Stack SQL query endpoint (e.g. https://eu-nbg-2-connect.betterstackdata.com)"
     )
-    username = _p(
-        "Better Stack username (Integrations > Connect ClickHouse HTTP client)"
-    )
+    username = _p("Better Stack username (Integrations > Connect ClickHouse HTTP client)")
     password = _p("Better Stack password", secret=True)
     sources_raw = _p(
         "Better Stack sources, comma-separated base IDs from dashboard (optional hint for the planner)"

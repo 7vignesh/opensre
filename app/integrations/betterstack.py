@@ -208,9 +208,7 @@ def validate_betterstack_config(
 
     try:
         with _sql_client(config) as client:
-            response, err = _post_sql(
-                client, config.query_endpoint, _VALIDATION_PROBE_SQL
-            )
+            response, err = _post_sql(client, config.query_endpoint, _VALIDATION_PROBE_SQL)
     except Exception as err:  # noqa: BLE001 — final-resort guard around transport setup
         logger.debug("Better Stack validate_config failed", exc_info=True)
         return BetterStackValidationResult(
@@ -399,9 +397,7 @@ def query_logs(
             response, err = _post_sql(client, config.query_endpoint, sql)
     except Exception as err:  # noqa: BLE001 — final-resort guard around transport setup
         logger.debug("Better Stack query_logs failed", exc_info=True)
-        return _error_evidence(
-            f"Better Stack connection failed: {err}", source=safe_source
-        )
+        return _error_evidence(f"Better Stack connection failed: {err}", source=safe_source)
 
     if err is not None or response is None:
         return _error_evidence(
@@ -416,8 +412,7 @@ def query_logs(
         )
     if response.status_code != 200:
         return _error_evidence(
-            f"Better Stack query returned HTTP {response.status_code}: "
-            f"{response.text[:200]}",
+            f"Better Stack query returned HTTP {response.status_code}: {response.text[:200]}",
             source=safe_source,
         )
 

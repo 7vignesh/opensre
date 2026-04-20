@@ -186,7 +186,9 @@ def _extract_k8s_tags_from_evidence(evidence: dict[str, Any]) -> dict[str, str]:
                 if not isinstance(tag, str) or ":" not in tag:
                     continue
                 key, _, val = tag.partition(":")
-                if (key.startswith("kube_") or key in ("pod_name", "container_name")) and key not in k8s:
+                if (
+                    key.startswith("kube_") or key in ("pod_name", "container_name")
+                ) and key not in k8s:
                     k8s[key] = val
     return k8s
 
@@ -308,7 +310,9 @@ def _build_evidence_sections(state: InvestigationState, evidence: dict[str, Any]
     if failed_jobs:
         section = f"\nAWS Batch Failed Jobs ({len(failed_jobs)}):\n"
         for job in failed_jobs[:5]:
-            section += f"- {job.get('job_name', 'Unknown')}: {job.get('status_reason', 'No reason')}\n"
+            section += (
+                f"- {job.get('job_name', 'Unknown')}: {job.get('status_reason', 'No reason')}\n"
+            )
         sections.append(section)
 
     # Failed tools (only show if data exists)
@@ -391,9 +395,7 @@ def _build_evidence_sections(state: InvestigationState, evidence: dict[str, Any]
     betterstack_logs = evidence.get("betterstack_logs", [])
     if betterstack_logs:
         bs_source = evidence.get("betterstack_source", "") or "(unknown source)"
-        section = (
-            f"\nBetter Stack Logs ({len(betterstack_logs)} rows from {bs_source}):\n"
-        )
+        section = f"\nBetter Stack Logs ({len(betterstack_logs)} rows from {bs_source}):\n"
         for row in betterstack_logs[:15]:
             if not isinstance(row, dict):
                 continue
@@ -497,7 +499,9 @@ def _build_evidence_sections(state: InvestigationState, evidence: dict[str, Any]
         section = f"\nDatadog Monitors ({len(datadog_monitors)}):\n"
         for monitor in datadog_monitors[:5]:
             section += f"- {monitor.get('name', 'unknown')} [{monitor.get('overall_state', '')}]\n"
-            section += f"  Type: {monitor.get('type', '')}, Query: {monitor.get('query', '')[:200]}\n"
+            section += (
+                f"  Type: {monitor.get('type', '')}, Query: {monitor.get('query', '')[:200]}\n"
+            )
         sections.append(section)
 
     # Datadog events
@@ -716,10 +720,7 @@ def _build_vercel_evidence_section(
             if not isinstance(deployment, dict):
                 continue
             git_meta = _extract_vercel_git_metadata(deployment.get("meta", {}))
-            line = (
-                f"- {deployment.get('id', 'unknown')} "
-                f"[{deployment.get('state', 'unknown')}]"
-            )
+            line = f"- {deployment.get('id', 'unknown')} [{deployment.get('state', 'unknown')}]"
             if deployment.get("error"):
                 line += f" error={str(deployment.get('error'))[:140]}"
             if git_meta["sha"]:
@@ -854,6 +855,7 @@ def _format_datadog_log_entry(log: Any) -> str:
         ts_prefix = f"[{time_part}] "
     elif isinstance(raw_ts, int | float):
         import datetime
+
         ts_prefix = f"[{datetime.datetime.utcfromtimestamp(raw_ts / 1000 if raw_ts > 1e10 else raw_ts).strftime('%H:%M:%S')}] "
 
     tag_parts: dict[str, str] = {}

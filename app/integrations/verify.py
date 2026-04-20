@@ -564,7 +564,11 @@ def _verify_alertmanager(source: str, config: dict[str, Any]) -> dict[str, str]:
         )
 
     status_data = result.get("status", {})
-    cluster_status = status_data.get("cluster", {}).get("status", "unknown") if isinstance(status_data, dict) else "ok"
+    cluster_status = (
+        status_data.get("cluster", {}).get("status", "unknown")
+        if isinstance(status_data, dict)
+        else "ok"
+    )
     return _result(
         "alertmanager",
         source,

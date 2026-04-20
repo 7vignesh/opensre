@@ -75,16 +75,12 @@ class TestBetterStackConfig:
         assert c.is_configured is False
 
     def test_is_configured_requires_endpoint_and_username(self) -> None:
-        assert BetterStackConfig(
-            query_endpoint="https://x", username="u"
-        ).is_configured is True
+        assert BetterStackConfig(query_endpoint="https://x", username="u").is_configured is True
         assert BetterStackConfig(query_endpoint="https://x").is_configured is False
         assert BetterStackConfig(username="u").is_configured is False
 
     def test_normalize_endpoint_strips_trailing_slash_and_whitespace(self) -> None:
-        c = BetterStackConfig(
-            query_endpoint="  https://eu-nbg-2-connect.betterstackdata.com/  "
-        )
+        c = BetterStackConfig(query_endpoint="  https://eu-nbg-2-connect.betterstackdata.com/  ")
         assert c.query_endpoint == "https://eu-nbg-2-connect.betterstackdata.com"
 
     def test_normalize_username_strips_whitespace(self) -> None:
@@ -149,23 +145,17 @@ class TestBuildBetterStackConfig:
 
 
 class TestBetterStackConfigFromEnv:
-    def test_returns_none_without_endpoint(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_none_without_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("BETTERSTACK_QUERY_ENDPOINT", raising=False)
         monkeypatch.setenv("BETTERSTACK_USERNAME", "u")
         assert betterstack_config_from_env() is None
 
-    def test_returns_none_without_username(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_none_without_username(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BETTERSTACK_QUERY_ENDPOINT", "https://x")
         monkeypatch.delenv("BETTERSTACK_USERNAME", raising=False)
         assert betterstack_config_from_env() is None
 
-    def test_loads_from_env_full(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loads_from_env_full(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(
             "BETTERSTACK_QUERY_ENDPOINT",
             "https://eu-nbg-2-connect.betterstackdata.com",
@@ -180,9 +170,7 @@ class TestBetterStackConfigFromEnv:
         assert c.password == "p"
         assert c.sources == ["t1_myapp", "t2_gateway"]
 
-    def test_loads_without_optional_sources(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loads_without_optional_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("BETTERSTACK_QUERY_ENDPOINT", "https://x")
         monkeypatch.setenv("BETTERSTACK_USERNAME", "u")
         monkeypatch.delenv("BETTERSTACK_SOURCES", raising=False)
@@ -193,38 +181,42 @@ class TestBetterStackConfigFromEnv:
 
 class TestBetterStackHelpers:
     def test_is_available_true_with_configured_sources(self) -> None:
-        assert betterstack_is_available(
-            {
-                "betterstack": {
-                    "query_endpoint": "https://x",
-                    "username": "u",
-                    "sources": ["t1_myapp"],
+        assert (
+            betterstack_is_available(
+                {
+                    "betterstack": {
+                        "query_endpoint": "https://x",
+                        "username": "u",
+                        "sources": ["t1_myapp"],
+                    }
                 }
-            }
-        ) is True
+            )
+            is True
+        )
 
     def test_is_available_true_with_source_hint(self) -> None:
         # Alert-derived source_hint (from betterstack_source annotation) is
         # sufficient to make the tool callable even without a configured
         # sources list.
-        assert betterstack_is_available(
-            {
-                "betterstack": {
-                    "query_endpoint": "https://x",
-                    "username": "u",
-                    "sources": [],
-                    "source_hint": "t1_alert_inferred",
+        assert (
+            betterstack_is_available(
+                {
+                    "betterstack": {
+                        "query_endpoint": "https://x",
+                        "username": "u",
+                        "sources": [],
+                        "source_hint": "t1_alert_inferred",
+                    }
                 }
-            }
-        ) is True
+            )
+            is True
+        )
 
     def test_is_available_false_without_endpoint(self) -> None:
         assert betterstack_is_available({"betterstack": {"username": "u"}}) is False
 
     def test_is_available_false_without_username(self) -> None:
-        assert betterstack_is_available(
-            {"betterstack": {"query_endpoint": "https://x"}}
-        ) is False
+        assert betterstack_is_available({"betterstack": {"query_endpoint": "https://x"}}) is False
 
     def test_is_available_false_when_source_missing(self) -> None:
         assert betterstack_is_available({}) is False
@@ -234,15 +226,18 @@ class TestBetterStackHelpers:
         # alert-derived source_hint — the executor has no path to propagate
         # a source to the tool, so availability must be False to prevent a
         # deterministic empty-source failure at call time.
-        assert betterstack_is_available(
-            {
-                "betterstack": {
-                    "query_endpoint": "https://x",
-                    "username": "u",
-                    "sources": [],
+        assert (
+            betterstack_is_available(
+                {
+                    "betterstack": {
+                        "query_endpoint": "https://x",
+                        "username": "u",
+                        "sources": [],
+                    }
                 }
-            }
-        ) is False
+            )
+            is False
+        )
 
     def test_extract_params_full(self) -> None:
         params = betterstack_extract_params(
@@ -276,25 +271,19 @@ class TestBetterStackHelpers:
     def test_extract_params_source_from_hint(self) -> None:
         # The alert-derived source_hint surfaces as the scalar ``source`` kwarg
         # so the executor can propagate alert context into the tool.
-        params = betterstack_extract_params(
-            {"betterstack": {"source_hint": "t99_svc"}}
-        )
+        params = betterstack_extract_params({"betterstack": {"source_hint": "t99_svc"}})
         assert params["source"] == "t99_svc"
 
     def test_extract_params_source_empty_when_no_hint(self) -> None:
         # When no alert hint is present, ``source`` is empty and the tool's
         # own fallback picks the first configured source (if any).
-        params = betterstack_extract_params(
-            {"betterstack": {"sources": ["t1", "t2"]}}
-        )
+        params = betterstack_extract_params({"betterstack": {"sources": ["t1", "t2"]}})
         assert params["source"] == ""
         assert params["sources"] == ["t1", "t2"]
 
     def test_extract_params_sources_copy_not_alias(self) -> None:
         original = ["t1"]
-        params = betterstack_extract_params(
-            {"betterstack": {"sources": original}}
-        )
+        params = betterstack_extract_params({"betterstack": {"sources": original}})
         params["sources"].append("t2")
         assert original == ["t1"]
 
@@ -413,17 +402,13 @@ class TestQueryLogs:
 
     def test_invalid_since_rejected(self, patched_sql_client) -> None:
         patched_sql_client(lambda _r: httpx.Response(200, text=""))
-        result = query_logs(
-            _configured(), source="t1_myapp", since="not-a-timestamp"
-        )
+        result = query_logs(_configured(), source="t1_myapp", since="not-a-timestamp")
         assert result["available"] is False
         assert "since" in result["error"].lower()
 
     def test_invalid_until_rejected(self, patched_sql_client) -> None:
         patched_sql_client(lambda _r: httpx.Response(200, text=""))
-        result = query_logs(
-            _configured(), source="t1_myapp", until="nope"
-        )
+        result = query_logs(_configured(), source="t1_myapp", until="nope")
         assert result["available"] is False
         assert "until" in result["error"].lower()
 
@@ -528,9 +513,7 @@ class TestQueryLogs:
         assert "_row_type = 1" in body
         assert body.rstrip().endswith("FORMAT JSONEachRow")
 
-    def test_sql_contains_time_bounds_when_set(
-        self, patched_sql_client
-    ) -> None:
+    def test_sql_contains_time_bounds_when_set(self, patched_sql_client) -> None:
         captured: dict[str, httpx.Request] = {}
 
         def _capturing(req: httpx.Request) -> httpx.Response:

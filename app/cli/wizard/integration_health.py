@@ -464,9 +464,7 @@ def validate_betterstack_integration(
             }
         )
     except Exception as err:  # noqa: BLE001 — config errors should surface to the user verbatim
-        return IntegrationHealthResult(
-            ok=False, detail=f"Better Stack config invalid: {err}"
-        )
+        return IntegrationHealthResult(ok=False, detail=f"Better Stack config invalid: {err}")
     result = validate_betterstack_config(config)
     return IntegrationHealthResult(ok=result.ok, detail=result.detail)
 

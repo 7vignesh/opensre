@@ -88,7 +88,9 @@ def node_plan_actions(state: InvestigationState) -> dict:
         for candidate in fallback_candidates:
             if candidate in available_action_names:
                 planned_actions = [candidate]
-                plan_rationale = "Controller fallback: LLM returned empty plan. Forcing verification action."
+                plan_rationale = (
+                    "Controller fallback: LLM returned empty plan. Forcing verification action."
+                )
                 break
         if not planned_actions:
             planned_actions = [available_action_names[0]]
