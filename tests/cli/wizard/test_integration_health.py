@@ -137,6 +137,7 @@ def test_validate_slack_webhook_succeeds_for_allowed_probe_statuses(
     result = validate_slack_webhook(webhook_url="https://hooks.slack.com/services/T000/B000/abc")
 
     assert result.ok is True
+    assert "non-posting probe" in result.detail.lower()
     assert f"HTTP {status_code}" in result.detail
 
 
