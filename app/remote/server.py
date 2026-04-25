@@ -513,7 +513,7 @@ def list_investigations() -> list[InvestigationMeta]:
     return items
 
 
-@app.get("/investigations/{inv_id}")
+@app.get("/investigations/{inv_id:path}")
 def get_investigation(inv_id: str) -> Response:
     """Return the raw ``.md`` content of a single investigation."""
     path = _safe_investigation_path(inv_id)
@@ -527,7 +527,7 @@ def get_investigation(inv_id: str) -> Response:
 # ---------------------------------------------------------------------------
 
 
-_SAFE_INV_ID = re.compile(r"^[\w\-]+\Z")
+_SAFE_INV_ID = re.compile(r"^[\w-]+$")
 
 
 def _safe_investigation_path(inv_id: str) -> Path:

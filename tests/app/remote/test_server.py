@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 from fastapi import HTTPException
@@ -64,6 +65,33 @@ def test_protected_remote_endpoint_requires_matching_api_key(
     assert wrong_response.status_code == 403
     assert valid_response.status_code == 200
     assert valid_response.json() == []
+
+
+@pytest.mark.parametrize(
+    "invalid_id",
+    [
+        "../x",
+        "x/..",
+        "x.md",
+        "x y",
+        "x$y",
+    ],
+)
+def test_get_investigation_rejects_invalid_id_with_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+    remote_client: TestClient,
+    invalid_id: str,
+) -> None:
+    monkeypatch.setattr(remote_server, "_AUTH_KEY", "secret-key")
+    encoded_id = quote(invalid_id, safe="")
+
+    response = remote_client.get(
+        f"/investigations/{encoded_id}",
+        headers={"x-api-key": "secret-key"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid investigation ID"}
 
 
 @pytest.mark.parametrize("path", ["/ok", "/version", "/health/deep"])
