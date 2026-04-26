@@ -30,6 +30,54 @@ def _build_mr_note(slack_message: str) -> str:
     return f"### RCA Finding\n\n<details>\n<summary>Investigation summary</summary>\n\n{body}\n\n</details>"
 
 
+def _create_investigation_and_attach_url(
+    state: InvestigationState,
+    *,
+    report_md: str,
+    summary: str | None,
+) -> tuple[str | None, str | None]:
+    """Create an investigation record and attach the public URL in a follow-up ingest call.
+
+    Step 1 – persist the report and obtain the ``investigation_id``.
+    Step 2 – if an ID was returned, build the investigation URL and send a
+             second ingest to attach it so the web app can link to the record.
+
+    Returns ``(investigation_id, investigation_url)``.
+    """
+    # Step 1: persist the report and obtain the investigation_id.
+    investigation_id: str | None = None
+    try:
+        state_with_report = cast(
+            InvestigationState,
+            {**state, "problem_report": {"report_md": report_md}, "summary": summary},
+        )
+        investigation_id = send_ingest(state_with_report)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[publish] ingest failed: %s", exc)
+
+    investigation_url = get_investigation_url(state.get("organization_slug"), investigation_id)
+
+    # Step 2: attach the investigation URL so the web app can link to the record.
+    if investigation_id:
+        try:
+            state_with_url = cast(
+                InvestigationState,
+                {
+                    **state,
+                    "problem_report": {
+                        "report_md": report_md,
+                        "investigation_url": investigation_url,
+                    },
+                    "summary": summary,
+                },
+            )
+            send_ingest(state_with_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[publish] ingest url attachment failed: %s", exc)
+
+    return investigation_id, investigation_url
+
+
 def generate_report(state: InvestigationState) -> dict:
     """Generate and publish the final RCA report."""
     from app.utils.slack_delivery import build_action_blocks, send_slack_report
@@ -45,36 +93,9 @@ def generate_report(state: InvestigationState) -> dict:
     if isinstance(short_summary, str):
         short_summary = masking_ctx.unmask(short_summary)
 
-    # First ingest: persist the report and get back the investigation_id
-    investigation_id: str | None = None
-    try:
-        state_with_report = cast(
-            InvestigationState,
-            {**state, "problem_report": {"report_md": slack_message}, "summary": short_summary},
-        )
-        investigation_id = send_ingest(state_with_report)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[publish] ingest failed: %s", exc)
-
-    investigation_url = get_investigation_url(state.get("organization_slug"), investigation_id)
-
-    # Second ingest: update the record with the investigation_url so the web app can link to it
-    if investigation_id:
-        try:
-            state_with_url = cast(
-                InvestigationState,
-                {
-                    **state,
-                    "problem_report": {
-                        "report_md": slack_message,
-                        "investigation_url": investigation_url,
-                    },
-                    "summary": short_summary,
-                },
-            )
-            send_ingest(state_with_url)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[publish] ingest url update failed: %s", exc)
+    investigation_id, investigation_url = _create_investigation_and_attach_url(
+        state, report_md=slack_message, summary=short_summary
+    )
 
     all_blocks = build_slack_blocks(ctx) + build_action_blocks(investigation_url, investigation_id)
     all_blocks = masking_ctx.unmask_value(all_blocks)

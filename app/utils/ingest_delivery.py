@@ -135,3 +135,61 @@ def send_ingest(state: InvestigationState) -> str | None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("[ingest] Delivery failed: %s", exc)
     return None
+
+
+def ingest_investigation_with_url(
+    state: InvestigationState,
+    *,
+    report_md: str,
+    summary: str | None,
+    investigation_url: str | None,
+) -> str | None:
+    """Create an investigation record and, if an ID is returned, attach the URL.
+
+    This collapses the two-step ingest sequence into one explicit helper:
+
+    1. Call ``send_ingest`` with the report to create the investigation and
+       receive back an ``investigation_id``.
+    2. If an ID was returned *and* an ``investigation_url`` is available, call
+       ``send_ingest`` a second time to attach the URL so the web app can link
+       to the investigation.
+
+    Returns the ``investigation_id`` from step 1 (or ``None`` when step 1
+    fails or is skipped).
+    """
+    from typing import cast
+
+    # Step 1: persist the report and obtain the investigation_id.
+    investigation_id: str | None = None
+    try:
+        state_with_report = cast(
+            InvestigationState,
+            {
+                **state,
+                "problem_report": {"report_md": report_md},
+                "summary": summary,
+            },
+        )
+        investigation_id = send_ingest(state_with_report)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[ingest] initial ingest failed: %s", exc)
+
+    # Step 2: attach the investigation URL if we have both an ID and a URL.
+    if investigation_id and investigation_url:
+        try:
+            state_with_url = cast(
+                InvestigationState,
+                {
+                    **state,
+                    "problem_report": {
+                        "report_md": report_md,
+                        "investigation_url": investigation_url,
+                    },
+                    "summary": summary,
+                },
+            )
+            send_ingest(state_with_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[ingest] url attachment ingest failed: %s", exc)
+
+    return investigation_id
