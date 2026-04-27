@@ -37,6 +37,10 @@ class TestAzureMonitorLogsToolContract(BaseToolContract):
             },
             True,
         ),
+            (
+                {},
+                False,
+            ),
         (
             {
                 "azure": {
@@ -73,13 +77,18 @@ class TestAzureMonitorLogsToolContract(BaseToolContract):
 def test_is_available_requires_verified_workspace_and_token(sources: dict, expected: bool) -> None:
     rt = _registered_tool()
     assert rt.is_available(sources) is expected
+        def test_bounded_limit_caps_requested_limit() -> None:
+            assert _bounded_limit(300, 100) == 100
 
 
-def test_extract_params_maps_fields_and_defaults() -> None:
-    rt = _registered_tool()
-    params = rt.extract_params(
-        {
-            "azure": {
+        def test_bounded_limit_enforces_hard_ceiling() -> None:
+            # max_results above _MAX_HARD_LIMIT (200) must still be capped at 200
+            assert _bounded_limit(500, 300) == 200
+
+
+        def test_bounded_limit_enforces_minimum_of_one() -> None:
+            assert _bounded_limit(0, 100) == 1
+            assert _bounded_limit(-10, 100) == 1
                 "workspace_id": " workspace-123 ",
                 "access_token": " token-abc ",
                 "endpoint": " https://api.loganalytics.io ",
@@ -98,6 +107,7 @@ def test_bounded_limit_caps_requested_limit() -> None:
     assert _bounded_limit(300, 100) == 100
 
 
+<<<<<<< HEAD
 def test_bounded_limit_enforces_hard_ceiling() -> None:
     # max_results above _MAX_HARD_LIMIT (200) must still be capped at 200
     assert _bounded_limit(500, 300) == 200
@@ -106,6 +116,11 @@ def test_bounded_limit_enforces_hard_ceiling() -> None:
 def test_bounded_limit_enforces_minimum_of_one() -> None:
     assert _bounded_limit(0, 100) == 1
     assert _bounded_limit(-10, 100) == 1
+=======
+def test_bounded_limit_respects_hard_cap() -> None:
+    # max_results > _MAX_HARD_LIMIT (200) — the hard cap should win
+    assert _bounded_limit(300, 500) == 200
+>>>>>>> 87579e4 (test(tools): address review by yash — add missing cases and stronger assertions)
 
 
 @pytest.mark.parametrize(
@@ -188,6 +203,10 @@ def test_run_http_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "error" in result
     assert "401" in result["error"]
     assert result["source"] == "azure"
+<<<<<<< HEAD
+=======
+    # On HTTP failure the tool should mark the source unavailable and return no rows
+>>>>>>> 87579e4 (test(tools): address review by yash — add missing cases and stronger assertions)
     assert result["available"] is False
     assert result["rows"] == []
 
