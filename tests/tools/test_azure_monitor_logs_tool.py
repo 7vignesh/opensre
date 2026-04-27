@@ -9,6 +9,7 @@ import pytest
 
 from app.tools.AzureMonitorLogsTool import (
     _bounded_limit,
+    _ensure_take_clause,
     query_azure_monitor_logs,
 )
 from tests.tools.conftest import BaseToolContract
@@ -96,6 +97,18 @@ def test_bounded_limit_caps_requested_limit() -> None:
     assert _bounded_limit(300, 100) == 100
 
 
+@pytest.mark.parametrize(
+    "query,limit,expected",
+    [
+        ("", 10, "AppTraces | order by TimeGenerated desc | take 10"),
+        ("AppTraces | order by TimeGenerated desc", 5, "AppTraces | order by TimeGenerated desc | take 5"),
+        ("AppTraces | take 100", 5, "AppTraces | take 100"),
+    ],
+)
+def test_ensure_take_clause_branches(query: str, limit: int, expected: str) -> None:
+    assert _ensure_take_clause(query, limit) == expected
+
+
 def test_run_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     mocked_response = MagicMock()
     mocked_response.raise_for_status.return_value = None
@@ -114,10 +127,15 @@ def test_run_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         ]
     }
 
-    monkeypatch.setattr(
-        "app.tools.AzureMonitorLogsTool.httpx.post",
-        lambda *_args, **_kwargs: mocked_response,
-    )
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, **kwargs: Any) -> MagicMock:
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers", {})
+        captured["json"] = kwargs.get("json", {})
+        return mocked_response
+
+    monkeypatch.setattr("app.tools.AzureMonitorLogsTool.httpx.post", fake_post)
 
     result = query_azure_monitor_logs(
         workspace_id="workspace-123",
@@ -130,6 +148,10 @@ def test_run_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["source"] == "azure"
     assert result["total_returned"] == 2
     assert result["rows"][0]["Message"] == "error: failed to connect"
+    # Assert the outgoing request was constructed correctly
+    assert "workspace-123" in captured["url"]
+    assert captured["headers"]["Authorization"] == "Bearer token-abc"
+    assert "query" in captured["json"]
 
 
 def test_run_http_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
