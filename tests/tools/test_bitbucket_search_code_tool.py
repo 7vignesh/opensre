@@ -112,7 +112,9 @@ def test_run_happy_path() -> None:
 
 
 def test_run_returns_unavailable_without_credentials() -> None:
-    result = search_bitbucket_code(query="error OR exception")
+    # Ensure env-based config does not make this test call out to Bitbucket
+    with patch("app.tools.BitbucketSearchCodeTool.bitbucket_config_from_env", return_value=None):
+        result = search_bitbucket_code(query="error OR exception")
 
     assert result["available"] is False
     assert result["results"] == []

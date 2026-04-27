@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -114,7 +114,9 @@ def test_run_happy_path() -> None:
 
 
 def test_run_returns_unavailable_without_credentials() -> None:
-    result = list_bitbucket_commits(repo_slug="backend-service")
+    # Ensure env-based config doesn't make this test flaky
+    with patch("app.tools.BitbucketSearchCodeTool.bitbucket_config_from_env", return_value=None):
+        result = list_bitbucket_commits(repo_slug="backend-service")
 
     assert result["available"] is False
     assert result["commits"] == []

@@ -36,6 +36,29 @@ class TestBitbucketFileContentsToolContract(BaseToolContract):
             },
             True,
         ),
+        (
+            {
+                "bitbucket": {
+                    "connection_verified": True,
+                    "workspace": "acme",
+                    "username": "bb-user",
+                    "app_password": "bb-pass",
+                }
+            },
+            False,
+        ),
+        (
+            {
+                "bitbucket": {
+                    "connection_verified": True,
+                    "workspace": "acme",
+                    "username": "bb-user",
+                    "app_password": "bb-pass",
+                    "path": "src/main.py",
+                }
+            },
+            False,
+        ),
         ({"bitbucket": {"connection_verified": True, "workspace": "acme"}}, False),
         ({"bitbucket": {"connection_verified": True, "repo_slug": "backend-service"}}, False),
         ({"bitbucket": {"connection_verified": True, "path": "src/main.py"}}, False),
@@ -108,7 +131,9 @@ def test_run_happy_path() -> None:
 
 
 def test_run_returns_unavailable_without_credentials() -> None:
-    result = get_bitbucket_file_contents(repo_slug="backend-service", path="src/main.py")
+    # Prevent loading real env config in CI/local runs
+    with patch("app.tools.BitbucketSearchCodeTool.bitbucket_config_from_env", return_value=None):
+        result = get_bitbucket_file_contents(repo_slug="backend-service", path="src/main.py")
 
     assert result["available"] is False
     assert result["file"] == {}
