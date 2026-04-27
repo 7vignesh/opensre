@@ -67,6 +67,7 @@ class TestAzureMonitorLogsToolContract(BaseToolContract):
             },
             False,
         ),
+        ({}, False),
     ],
 )
 def test_is_available_requires_verified_workspace_and_token(sources: dict, expected: bool) -> None:
@@ -95,6 +96,16 @@ def test_extract_params_maps_fields_and_defaults() -> None:
 
 def test_bounded_limit_caps_requested_limit() -> None:
     assert _bounded_limit(300, 100) == 100
+
+
+def test_bounded_limit_enforces_hard_ceiling() -> None:
+    # max_results above _MAX_HARD_LIMIT (200) must still be capped at 200
+    assert _bounded_limit(500, 300) == 200
+
+
+def test_bounded_limit_enforces_minimum_of_one() -> None:
+    assert _bounded_limit(0, 100) == 1
+    assert _bounded_limit(-10, 100) == 1
 
 
 @pytest.mark.parametrize(
@@ -177,6 +188,8 @@ def test_run_http_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "error" in result
     assert "401" in result["error"]
     assert result["source"] == "azure"
+    assert result["available"] is False
+    assert result["rows"] == []
 
 
 def test_run_unavailable_without_credentials() -> None:
