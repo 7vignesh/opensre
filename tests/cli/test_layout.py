@@ -19,7 +19,7 @@ def _normalized_output(output: str) -> str:
 
 def test_render_help_shows_root_commands(capsys) -> None:
     render_help()
-    output = capsys.readouterr().out
+    output = _normalized_output(capsys.readouterr().out)
 
     assert "Usage: opensre [OPTIONS] COMMAND [ARGS]..." in output
     assert "Commands:" in output
