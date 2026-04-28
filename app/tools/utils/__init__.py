@@ -1,4 +1,4 @@
-"""Tool utilities - data validation, evidence compaction, and log deduplication."""
+"""Tool utilities - code-host helpers, data validation, evidence compaction, and log deduplication."""
 
 from app.tools.utils.code_host_unavailable import code_host_unavailable_payload
 from app.tools.utils.compaction import (
