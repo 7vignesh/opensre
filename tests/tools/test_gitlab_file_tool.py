@@ -70,9 +70,12 @@ def test_extract_params_defaults_ref_to_main() -> None:
 def test_run_returns_unavailable_when_config_missing() -> None:
     with patch("app.tools.GitLabFileTool._resolve_config", return_value=None):
         result = get_gitlab_file_contents(project_id="42", file_path="src/main.py")
-    assert result["available"] is False
-    assert "not configured" in result["error"]
-    assert result["file"] == {}
+    assert result == {
+        "source": "gitlab",
+        "available": False,
+        "error": "GitLab integration is not configured.",
+        "file": {},
+    }
 
 
 def test_run_happy_path_decodes_base64_content() -> None:
