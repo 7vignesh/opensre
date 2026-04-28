@@ -134,3 +134,69 @@ def test_make_initial_state_uses_existing_annotations_and_labels_for_canonical_f
     assert canonical["alert_name"] == "[FIRING] CPU high"
     assert canonical["pipeline_name"] == "payments_etl"
     assert canonical["severity"] == "critical"
+
+
+def test_make_initial_state_keeps_common_labels_and_canonical_labels_separate() -> None:
+    state = make_initial_state(
+        alert_name="HighErrorRate",
+        pipeline_name="payments",
+        severity="critical",
+        raw_alert={
+            "commonLabels": {"alertname": "CPUHigh"},
+            "commonAnnotations": {"summary": "CPU high"},
+        },
+    )
+
+    raw_alert = state["raw_alert"]
+    assert isinstance(raw_alert, dict)
+    canonical = raw_alert["canonical_alert"]
+
+    canonical["labels"]["mutated"] = "yes"
+    canonical["annotations"]["extra"] = "note"
+
+    assert raw_alert["commonLabels"] == {"alertname": "CPUHigh"}
+    assert raw_alert["commonAnnotations"] == {"summary": "CPU high"}
+    assert "mutated" not in raw_alert["commonLabels"]
+    assert "extra" not in raw_alert["commonAnnotations"]
+
+
+def test_make_initial_state_preserves_explicit_empty_common_labels() -> None:
+    state = make_initial_state(
+        alert_name="HighErrorRate",
+        pipeline_name="payments",
+        severity="critical",
+        raw_alert={
+            "commonLabels": {},
+            "labels": {"severity": "low", "pipeline": "wrong"},
+            "commonAnnotations": {},
+            "annotations": {"summary": "should not win"},
+        },
+    )
+
+    raw_alert = state["raw_alert"]
+    assert isinstance(raw_alert, dict)
+    assert raw_alert["commonLabels"] == {}
+    assert raw_alert["commonAnnotations"] == {}
+
+    canonical = raw_alert["canonical_alert"]
+    assert canonical["labels"] == {}
+    assert canonical["annotations"] == {}
+
+
+def test_make_initial_state_preserves_float_pid() -> None:
+    state = make_initial_state(
+        alert_name="HighErrorRate",
+        pipeline_name="payments",
+        severity="critical",
+        raw_alert={
+            "commonLabels": {"pid": 4242.0},
+            "commonAnnotations": {"process_name": "worker"},
+        },
+    )
+
+    raw_alert = state["raw_alert"]
+    assert isinstance(raw_alert, dict)
+    assert raw_alert["pid"] == 4242
+
+    canonical = raw_alert["canonical_alert"]
+    assert canonical["process"]["pid"] == 4242

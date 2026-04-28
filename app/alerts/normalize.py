@@ -59,6 +59,9 @@ def _coerce_pid(value: Any) -> int | None:
         return None
     if isinstance(value, int):
         return value if value >= 0 else None
+    if isinstance(value, float) and value.is_integer():
+        pid = int(value)
+        return pid if pid >= 0 else None
     text = _to_text(value)
     if text is None:
         return None
@@ -89,17 +92,19 @@ def normalize_alert_payload(raw_alert: dict[str, Any]) -> dict[str, Any]:
     """
     normalized = dict(raw_alert)
 
-    labels = _as_mapping(normalized.get("commonLabels"))
-    if not labels:
-        labels = _as_mapping(normalized.get("labels"))
+    raw_common_labels = normalized.get("commonLabels")
+    labels = _as_mapping(raw_common_labels) if raw_common_labels is not None else _as_mapping(normalized.get("labels"))
 
     tags = _parse_tags(normalized.get("tags"))
     if tags:
         labels = {**tags, **labels}
 
-    annotations = _as_mapping(normalized.get("commonAnnotations"))
-    if not annotations:
-        annotations = _as_mapping(normalized.get("annotations"))
+    raw_common_annotations = normalized.get("commonAnnotations")
+    annotations = (
+        _as_mapping(raw_common_annotations)
+        if raw_common_annotations is not None
+        else _as_mapping(normalized.get("annotations"))
+    )
 
     normalized["commonLabels"] = labels
     normalized["commonAnnotations"] = annotations
@@ -169,8 +174,8 @@ def normalize_alert_payload(raw_alert: dict[str, Any]) -> dict[str, Any]:
             )
         ),
         "alert_source": _to_text(normalized.get("alert_source")),
-        "labels": labels,
-        "annotations": annotations,
+        "labels": dict(labels),
+        "annotations": dict(annotations),
         "process": {
             "name": process_name,
             "cmdline": cmdline,
