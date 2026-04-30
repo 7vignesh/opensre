@@ -62,9 +62,11 @@ def test_detect_ambiguous_without_token(mock_which: MagicMock, mock_run: MagicMo
 @patch("app.integrations.llm_cli.binary_resolver.shutil.which", return_value="/usr/bin/copilot")
 def test_build_adds_prompt_and_allow_all(mock_which: MagicMock) -> None:
     inv = CopilotAdapter().build(prompt="p", model="gpt-5.4", workspace="/work")
-    assert inv.stdin is None
+    assert inv.stdin == "p"
     assert inv.cwd == "/work"
     assert "-p" in inv.argv
+    # Prompt is supplied via stdin using `-p -` to avoid long argv limits.
+    assert "-" in inv.argv
     assert "--allow-all" in inv.argv
     assert "--no-ask-user" in inv.argv
     assert "--model" in inv.argv

@@ -193,7 +193,7 @@ class CopilotAdapter:
         argv: list[str] = [
             binary,
             "-p",
-            prompt,
+            "-",
             "-s",
             "--allow-all",
             "--no-ask-user",
@@ -211,7 +211,7 @@ class CopilotAdapter:
 
         return CLIInvocation(
             argv=tuple(argv),
-            stdin=None,
+            stdin=prompt,
             cwd=cwd,
             env={"COPILOT_ALLOW_ALL": "true"},
             timeout_sec=self.default_exec_timeout_sec,
