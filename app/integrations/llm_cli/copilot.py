@@ -70,6 +70,44 @@ def _classify_copilot_auth(returncode: int, stdout: str, stderr: str) -> tuple[b
     return None, "Auth status unknown."
 
 
+def _probe_copilot_auth(binary_path: str) -> tuple[bool | None, str]:
+    # Copilot CLI variants differ on auth-status invocation.
+    # Try interactive command form first, then legacy subcommand form.
+    commands: tuple[tuple[str, ...], ...] = (
+        (binary_path, "-i", "auth status"),
+        (binary_path, "auth", "status"),
+    )
+    last_result: tuple[bool | None, str] = (
+        None,
+        "Could not verify login status.",
+    )
+
+    for cmd in commands:
+        try:
+            auth_proc = subprocess.run(
+                list(cmd),
+                capture_output=True,
+                text=True,
+                timeout=_PROBE_TIMEOUT_SEC,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+
+        last_result = _classify_copilot_auth(
+            auth_proc.returncode, auth_proc.stdout, auth_proc.stderr
+        )
+
+        output = (auth_proc.stdout + "\n" + auth_proc.stderr).lower()
+        # If this form is unsupported, try the next known form.
+        if "invalid command format" in output:
+            continue
+
+        return last_result
+
+    return last_result
+
+
 class CopilotAdapter:
     """Non-interactive GitHub Copilot CLI (`copilot -p` with allow-all mode)."""
 
@@ -116,26 +154,13 @@ class CopilotAdapter:
             )
 
         version = _parse_semver(version_proc.stdout + version_proc.stderr)
-        # First, check env vars quickly
+        # First, check env vars quickly.
         logged_in, auth_detail = _copilot_auth_detail()
-        # Then try probing interactive auth status via `copilot auth status`.
-        try:
-            auth_proc = subprocess.run(
-                [binary_path, "auth", "status"],
-                capture_output=True,
-                text=True,
-                timeout=_PROBE_TIMEOUT_SEC,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            # Could not verify interactive login; keep env-based result.
-            pass
-        else:
-            # If env-based was ambiguous, prefer the CLI auth check.
-            if logged_in is None:
-                logged_in, auth_detail = _classify_copilot_auth(
-                    auth_proc.returncode, auth_proc.stdout, auth_proc.stderr
-                )
+
+        # If env-based auth is ambiguous, probe interactive login status.
+        if logged_in is None:
+            logged_in, auth_detail = _probe_copilot_auth(binary_path)
+
         return CLIProbe(
             installed=True,
             version=version,

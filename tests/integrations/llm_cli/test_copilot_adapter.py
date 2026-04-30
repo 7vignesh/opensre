@@ -26,12 +26,6 @@ def test_detect_path_binary_with_headless_token(mock_which: MagicMock, mock_run:
         assert args[0] == "/usr/bin/copilot"
         if args[1] == "--version":
             return _version_proc()
-        if args[1:] == ["auth", "status"]:
-            m = MagicMock()
-            m.returncode = 0
-            m.stdout = "Logged in with headless token\n"
-            m.stderr = ""
-            return m
         raise AssertionError(f"Unexpected args: {args}")
 
     mock_run.side_effect = side_effect
@@ -89,12 +83,42 @@ def test_build_falls_back_to_cwd_when_no_workspace(mock_which: MagicMock, tmp_pa
 @patch("app.integrations.llm_cli.copilot.subprocess.run")
 @patch("app.integrations.llm_cli.binary_resolver.shutil.which")
 def test_detect_interactive_login(mock_which: MagicMock, mock_run: MagicMock) -> None:
-    # Simulate `--version` then `auth status` showing interactive login.
+    # Simulate `--version` then `-i "auth status"` showing interactive login.
     mock_which.return_value = "/usr/bin/copilot"
 
     def side_effect(args: list[str], **kwargs: object) -> MagicMock:
         if args == ["/usr/bin/copilot", "--version"]:
             return _version_proc()
+        if args == ["/usr/bin/copilot", "-i", "auth status"]:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "Logged in as user@example.com\n"
+            m.stderr = ""
+            return m
+        raise AssertionError(f"Unexpected args: {args}")
+
+    mock_run.side_effect = side_effect
+    probe = CopilotAdapter().detect()
+    assert probe.installed is True
+    assert probe.logged_in is True
+
+
+@patch("app.integrations.llm_cli.copilot.subprocess.run")
+@patch("app.integrations.llm_cli.binary_resolver.shutil.which")
+def test_detect_interactive_login_falls_back_to_legacy_auth_command(
+    mock_which: MagicMock, mock_run: MagicMock
+) -> None:
+    mock_which.return_value = "/usr/bin/copilot"
+
+    def side_effect(args: list[str], **kwargs: object) -> MagicMock:
+        if args == ["/usr/bin/copilot", "--version"]:
+            return _version_proc()
+        if args == ["/usr/bin/copilot", "-i", "auth status"]:
+            m = MagicMock()
+            m.returncode = 1
+            m.stdout = ""
+            m.stderr = "error: Invalid command format."
+            return m
         if args == ["/usr/bin/copilot", "auth", "status"]:
             m = MagicMock()
             m.returncode = 0
