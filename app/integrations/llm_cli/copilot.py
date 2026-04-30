@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 
@@ -31,9 +32,10 @@ def _fallback_copilot_paths() -> list[str]:
 
 def _copilot_auth_detail() -> tuple[bool | None, str]:
     # Copilot CLI docs describe headless auth via tokens; absence of a token is
-    # ambiguous because interactive login may also be present in the credential store.
-    import os
-
+    # ambiguous because interactive login may also be present in the credential
+    # store. This helper only checks env vars; interactive status is probed by
+    # calling `copilot auth status` from `_probe_binary` so callers here treat
+    # the result as a quick env-based hint.
     token = (
         os.getenv("COPILOT_GITHUB_TOKEN", "").strip()
         or os.getenv("GH_TOKEN", "").strip()
@@ -45,6 +47,22 @@ def _copilot_auth_detail() -> tuple[bool | None, str]:
         None,
         "Auth status unclear. Set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN, or run copilot login.",
     )
+
+
+def _classify_copilot_auth(returncode: int, stdout: str, stderr: str) -> tuple[bool | None, str]:
+    text = (stdout + "\n" + stderr).lower()
+    if "not logged in" in text or "no credentials" in text:
+        return False, "Not logged in. Run: copilot login"
+    if returncode == 0 and ("logged in" in text or "authenticated" in text):
+        return True, (stdout.strip() or stderr.strip() or "Logged in.").splitlines()[0]
+    if "expired" in text or ("invalid" in text and "token" in text):
+        return False, "Session expired. Re-authenticate: copilot login"
+    if "network" in text or "unreachable" in text or "dns" in text or "connection refused" in text:
+        return None, "Network error while checking auth; will retry at invocation."
+    if returncode != 0:
+        tail = (stderr or stdout).strip()[:200]
+        return (None, f"Auth status unclear (exit {returncode}): {tail}" if tail else f"Auth status unclear (exit {returncode}).")
+    return None, "Auth status unknown."
 
 
 class CopilotAdapter:
@@ -93,7 +111,26 @@ class CopilotAdapter:
             )
 
         version = _parse_semver(version_proc.stdout + version_proc.stderr)
+        # First, check env vars quickly
         logged_in, auth_detail = _copilot_auth_detail()
+        # Then try probing interactive auth status via `copilot auth status`.
+        try:
+            auth_proc = subprocess.run(
+                [binary_path, "auth", "status"],
+                capture_output=True,
+                text=True,
+                timeout=_PROBE_TIMEOUT_SEC,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            # Could not verify interactive login; keep env-based result.
+            pass
+        else:
+            # If env-based was ambiguous, prefer the CLI auth check.
+            if logged_in is None:
+                logged_in, auth_detail = _classify_copilot_auth(
+                    auth_proc.returncode, auth_proc.stdout, auth_proc.stderr
+                )
         return CLIProbe(
             installed=True,
             version=version,
@@ -137,17 +174,18 @@ class CopilotAdapter:
         if workspace:
             argv.extend(["--add-dir", workspace])
 
+        # Ensure subprocess cwd is a valid path (subprocess rejects empty string).
+        cwd = workspace if workspace else os.getcwd()
+
         return CLIInvocation(
             argv=tuple(argv),
             stdin=None,
-            cwd=workspace or "",
+            cwd=cwd,
             env={"COPILOT_ALLOW_ALL": "true"},
             timeout_sec=self.default_exec_timeout_sec,
         )
 
-    def parse(self, *, stdout: str, stderr: str, returncode: int) -> str:
-        _ = stderr
-        _ = returncode
+    def parse(self, *, stdout: str, stderr: str, returncode: int) -> str:  # noqa: ARG002
         return (stdout or "").strip()
 
     def explain_failure(self, *, stdout: str, stderr: str, returncode: int) -> str:

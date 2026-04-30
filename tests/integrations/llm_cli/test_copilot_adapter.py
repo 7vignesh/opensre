@@ -71,6 +71,37 @@ def test_build_adds_prompt_and_allow_all(mock_which: MagicMock) -> None:
     mock_which.assert_called()
 
 
+@patch("app.integrations.llm_cli.binary_resolver.shutil.which", return_value="/usr/bin/copilot")
+def test_build_falls_back_to_cwd_when_no_workspace(mock_which: MagicMock, tmp_path) -> None:
+    # When workspace is empty, build() should set cwd to os.getcwd() (not empty string).
+    cwd_before = os.getcwd()
+    inv = CopilotAdapter().build(prompt="p", model=None, workspace="")
+    assert inv.cwd == cwd_before
+
+
+@patch("app.integrations.llm_cli.copilot.subprocess.run")
+@patch("app.integrations.llm_cli.binary_resolver.shutil.which")
+def test_detect_interactive_login(mock_which: MagicMock, mock_run: MagicMock) -> None:
+    # Simulate `--version` then `auth status` showing interactive login.
+    mock_which.return_value = "/usr/bin/copilot"
+
+    def side_effect(args: list[str], **kwargs: object) -> MagicMock:
+        if args == ["/usr/bin/copilot", "--version"]:
+            return _version_proc()
+        if args == ["/usr/bin/copilot", "auth", "status"]:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = "Logged in as user@example.com\n"
+            m.stderr = ""
+            return m
+        raise AssertionError(f"Unexpected args: {args}")
+
+    mock_run.side_effect = side_effect
+    probe = CopilotAdapter().detect()
+    assert probe.installed is True
+    assert probe.logged_in is True
+
+
 @patch("app.integrations.llm_cli.runner.subprocess.run")
 def test_cli_backed_client_forwards_copilot_env(mock_run: MagicMock) -> None:
     mock_adapter = MagicMock()
