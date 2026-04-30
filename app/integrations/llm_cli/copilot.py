@@ -53,6 +53,8 @@ def _classify_copilot_auth(returncode: int, stdout: str, stderr: str) -> tuple[b
     text = (stdout + "\n" + stderr).lower()
     if "not logged in" in text or "no credentials" in text:
         return False, "Not logged in. Run: copilot login"
+    if "rate limit" in text or "weekly rate limit" in text:
+        return True, "Logged in but rate-limited; try again later."
     if returncode == 0 and ("logged in" in text or "authenticated" in text):
         return True, (stdout.strip() or stderr.strip() or "Logged in.").splitlines()[0]
     if "expired" in text or ("invalid" in text and "token" in text):

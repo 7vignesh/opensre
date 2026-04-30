@@ -183,3 +183,27 @@ def test_cli_backed_client_forwards_copilot_env(mock_run: MagicMock) -> None:
 def test_fallback_paths_include_copilot_binary_name() -> None:
     paths = _fallback_copilot_paths()
     assert any(path.endswith("copilot") or path.endswith("copilot.cmd") for path in paths)
+
+
+@patch("app.integrations.llm_cli.copilot.subprocess.run")
+@patch("app.integrations.llm_cli.binary_resolver.shutil.which")
+def test_detect_rate_limited_treated_as_logged_in(
+    mock_which: MagicMock, mock_run: MagicMock
+) -> None:
+    mock_which.return_value = "/usr/bin/copilot"
+
+    def side_effect(args: list[str], **kwargs: object) -> MagicMock:
+        if args == ["/usr/bin/copilot", "--version"]:
+            return _version_proc()
+        if args == ["/usr/bin/copilot", "-i", "auth status"]:
+            m = MagicMock()
+            m.returncode = 1
+            m.stdout = ""
+            m.stderr = "You've reached your weekly rate limit."
+            return m
+        raise AssertionError(f"Unexpected args: {args}")
+
+    mock_run.side_effect = side_effect
+    probe = CopilotAdapter().detect()
+    assert probe.installed is True
+    assert probe.logged_in is True
