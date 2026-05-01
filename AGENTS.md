@@ -51,9 +51,11 @@
 
 - `app/analytics/` — Analytics event plumbing and install helpers used by the onboarding flow.
 - `app/auth/` — JWT and authentication helpers for local and hosted runtime access.
-- `app/cli/` — Command-line interface, onboarding wizard, local LLM helpers, and CLI tests support.
+- `app/cli/` — Command-line interface, onboarding wizard, local LLM helpers, and CLI tests support. Interactive terminal (TTY) loop: `app/cli/interactive_shell/`.
 - `app/constants/` — Shared prompt and other static constants.
-- `app/deployment/` — Deployment configuration and health helpers for hosted runtimes.
+- `app/deployment/` — Single home for “deployment” code, split by concern:
+  - `app/deployment/methods/` — *How* you ship (Railway CLI, LangSmith/LangGraph).
+  - `app/deployment/operations/` — *Runtime / infra* around a deployment (health polling, EC2 output files, provider dry-run validation).
 - `app/entrypoints/` — SDK and MCP entrypoints exposed to external runtimes.
 - `app/guardrails/` — Guardrail rules, evaluation engine, audit helpers, and CLI bindings.
 - `app/integrations/` — Integration config normalization, verification, selectors, store, and catalog logic.
@@ -63,7 +65,7 @@
 - `app/pipeline/` — Graph assembly, routing, and runner helpers; `app/graph_pipeline.py` is the compatibility shim.
 - `app/remote/` — Remote-hosted runtime operations and integration points.
 - `app/sandbox/` — Sandboxed execution helpers for controlled runtime actions.
-- `app/services/` — Reusable API clients and service adapters consumed by integrations and tools.
+- `app/services/` — Reusable clients and adapters for integrations/tools. LLM APIs: `app/services/AGENTS.md`.
 - `app/state/` — Shared agent and investigation state models plus state factories.
 - `app/tools/` — Tool registry, decorator, base classes, per-tool packages, shared utilities, and registry helpers.
 - `app/types/` — Shared typed contracts for evidence, retrieval, and tool-related payloads.
