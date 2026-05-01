@@ -166,8 +166,7 @@ def _codex_adapter_factory() -> LLMCLIAdapter:
     from app.integrations.llm_cli.codex import CodexAdapter
 
     return CodexAdapter()
- 
-
+    return CodexAdapter()
 def _copilot_adapter_factory() -> LLMCLIAdapter:
     from app.integrations.llm_cli.copilot import CopilotAdapter
 
