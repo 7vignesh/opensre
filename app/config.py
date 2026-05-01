@@ -168,9 +168,9 @@ class LLMSettings(StrictConfigModel):
             "ollama",
             "bedrock",
             "minimax",
-                "codex",
-                "copilot",
-                "claude-code",
+            "codex",
+            "copilot",
+            "claude-code",
         )
         if provider in valid_providers:
             return provider
