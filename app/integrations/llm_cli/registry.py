@@ -21,12 +21,16 @@ def _codex_factory() -> LLMCLIAdapter:
     from app.integrations.llm_cli.codex import CodexAdapter
 
     return CodexAdapter()
-
-
 def _copilot_factory() -> LLMCLIAdapter:
     from app.integrations.llm_cli.copilot import CopilotAdapter
 
     return CopilotAdapter()
+
+
+def _claude_code_factory() -> LLMCLIAdapter:
+    from app.integrations.llm_cli.claude_code import ClaudeCodeAdapter
+
+    return ClaudeCodeAdapter()
 
 
 CLI_PROVIDER_REGISTRY: dict[str, CLIProviderRegistration] = {
@@ -34,6 +38,13 @@ CLI_PROVIDER_REGISTRY: dict[str, CLIProviderRegistration] = {
     "copilot": CLIProviderRegistration(
         adapter_factory=_copilot_factory,
         model_env_key="COPILOT_MODEL",
+    ),
+    "claude-code": CLIProviderRegistration(
+        adapter_factory=_claude_code_factory, model_env_key="CLAUDE_CODE_MODEL"
+    ),
+    "claude-code": CLIProviderRegistration(
+        adapter_factory=_claude_code_factory, model_env_key="CLAUDE_CODE_MODEL"
+>>>>>>> origin/main
     ),
 }
 
