@@ -185,13 +185,8 @@ class LLMSettings(StrictConfigModel):
 
     @model_validator(mode="after")
     def _require_api_key_for_selected_provider(self) -> "LLMSettings":
-<<<<<<< HEAD
         if self.provider in ("ollama", "bedrock", "codex", "copilot", "claude-code"):
             return self  # ollama: local; bedrock: IAM; codex/copilot/claude-code: CLI auth
-=======
-        if self.provider in ("ollama", "bedrock", "codex", "claude-code"):
-            return self  # ollama: local; bedrock: IAM; codex/claude-code: CLI auth
->>>>>>> origin/main
         provider_to_key = {
             "anthropic": self.anthropic_api_key,
             "openai": self.openai_api_key,

@@ -273,18 +273,6 @@ SUPPORTED_PROVIDERS = (
         credential_secret=False,
         adapter_factory=_claude_code_adapter_factory,
     ),
-        value="claude-code",
-        label="Anthropic Claude Code CLI",
-        group="Local CLI providers",
-        api_key_env="",
-        model_env="CLAUDE_CODE_MODEL",
-        default_model="",
-        models=CLAUDE_CODE_MODELS,
-        credential_kind="cli",
-        credential_secret=False,
-        adapter_factory=_claude_code_adapter_factory,
->>>>>>> origin/main
-    ),
     ProviderOption(
         value="ollama",
         label="Ollama (local)",
