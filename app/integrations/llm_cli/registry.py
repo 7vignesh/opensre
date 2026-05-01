@@ -42,10 +42,6 @@ CLI_PROVIDER_REGISTRY: dict[str, CLIProviderRegistration] = {
     "claude-code": CLIProviderRegistration(
         adapter_factory=_claude_code_factory, model_env_key="CLAUDE_CODE_MODEL"
     ),
-    "claude-code": CLIProviderRegistration(
-        adapter_factory=_claude_code_factory, model_env_key="CLAUDE_CODE_MODEL"
->>>>>>> origin/main
-    ),
 }
 
 
