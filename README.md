@@ -1150,6 +1150,13 @@ Thanks goes to these amazing people:
             <sub><b>TejasS1233</b></sub>
         </a>
     </td>
+            <td align="center">
+        <a href="https://github.com/DsThakurRawat">
+            <img src="https://avatars.githubusercontent.com/u/186957976?v=4" width="100" alt="DsThakurRawat"/>
+            <br />
+            <sub><b>DsThakurRawat</b></sub>
+        </a>
+    </td>
 		</tr>
 	</tbody>
 </table>
