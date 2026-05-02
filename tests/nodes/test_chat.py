@@ -36,9 +36,8 @@ class _RecordingLLM:
     the expected alert-field cues.
     """
 
-    def __init__(self, record_file: str | None = None) -> None:
+    def __init__(self) -> None:
         self.last_prompt: str | None = None
-        self.record_file = record_file
 
     def invoke(self, messages: list[dict[str, str]]):
         # Normalize into a single string for inspection
@@ -52,14 +51,6 @@ class _RecordingLLM:
         # fields, return tracer_data; otherwise return general.
         cue_tokens = ["alertname", "state=alerting", "db_instance_identifier", "synthetic"]
         label = "tracer_data" if any(tok in prompt for tok in cue_tokens) else "general"
-
-        # Optionally record to file
-        if self.record_file:
-            with open(self.record_file, "a") as f:
-                f.write("=== Recording ===\n")
-                f.write(f"PROMPT:\n{prompt}\n")
-                f.write(f"LABEL: {label}\n")
-                f.write("\n")
 
         return MagicMock(content=label)
 
@@ -124,57 +115,27 @@ def test_general_node_returns_user_facing_message_for_codex_provider(
     )
 
 
-@pytest.mark.parametrize(
-    "message_content, use_recording_llm, expected_route",
-    [
-        (
-            "[synthetic-rds] Connection Exhaustion On payments-prod | "
-            "state=alerting | alertname=RDSDatabaseConnectionsHigh | severity=critical | "
-            "summary=DatabaseConnections reached 98% of max_connections and API traffic is failing "
-            "with too many clients. Diagnose the root cause.",
-            False,
-            "tracer_data",
-        ),
-        # Fixture-backed case: message_content is None -> load from synthetic fixture
-        (None, True, "tracer_data"),
-    ],
-)
-def test_router_routes_handcrafted_and_fixture_alerts(
-    message_content: str, use_recording_llm: bool, expected_route: str
-) -> None:
-    """Consolidated router tests for synthetic alerts.
+def test_router_routes_synthetic_rds_alert_to_tracer_data() -> None:
+    alert_path = (
+        Path(__file__).parent.parent
+        / "synthetic"
+        / "rds_postgres"
+        / "002-connection-exhaustion"
+        / "alert.json"
+    )
+    with alert_path.open() as f:
+        alert = json.load(f)
 
-    - Handcrafted synthetic message (mocked LLM returning the expected label)
-    - Fixture-backed synthetic message (uses `_RecordingLLM` to assert prompt cues)
-    """
-    if use_recording_llm:
-        record_file = Path(__file__).parent / "router_recordings.txt"
-        if record_file.exists():
-            record_file.unlink()
-        llm = _RecordingLLM(record_file=str(record_file))
-    else:
-        llm = MagicMock()
-        llm.invoke.return_value = MagicMock(content=expected_route)
+    message_content = (
+        f"[synthetic-rds] {alert['title']} | "
+        f"state={alert['state']} | "
+        f"alertname={alert['commonLabels']['alertname']} | "
+        f"severity={alert['commonLabels']['severity']} | "
+        f"summary={alert['commonAnnotations']['summary']}"
+    )
 
-    # If message_content is None, load the realistic synthetic RDS alert fixture
-    if message_content is None:
-        alert_path = (
-            Path(__file__).parent.parent
-            / "synthetic"
-            / "rds_postgres"
-            / "002-connection-exhaustion"
-            / "alert.json"
-        )
-        with alert_path.open() as f:
-            alert = json.load(f)
-
-        message_content = (
-            f"[synthetic-rds] {alert['title']} | "
-            f"state={alert['state']} | "
-            f"alertname={alert['commonLabels']['alertname']} | "
-            f"severity={alert['commonLabels']['severity']} | "
-            f"summary={alert['commonAnnotations']['summary']}"
-        )
+    llm = _RecordingLLM()
+    expected_route = "tracer_data"
 
     state = {"messages": [{"role": "user", "content": message_content}]}
 
@@ -182,9 +143,9 @@ def test_router_routes_handcrafted_and_fixture_alerts(
         out = chat_mod.router_node(state)
 
     assert out["route"] == expected_route
-    # If we're using a MagicMock LLM, ensure it was invoked once
-    if not use_recording_llm:
-        llm.invoke.assert_called_once()
+    assert llm.last_prompt is not None
+    assert "alertname" in llm.last_prompt
+    assert "state=alerting" in llm.last_prompt
 
 
 def test_router_node_routes_conceptual_question_to_general() -> None:
