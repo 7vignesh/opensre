@@ -14,9 +14,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from app.pipeline.runners import run_investigation
 
 RCA_DIR = Path(__file__).parent
+SYNTHETIC_RDS_ANSWER = (
+    Path(__file__).resolve().parents[2]
+    / "synthetic"
+    / "rds_postgres"
+    / "002-connection-exhaustion"
+    / "answer.yml"
+)
 
 
 def _parse_alert_md(path: Path) -> dict[str, Any]:
@@ -36,6 +45,38 @@ def _parse_alert_md(path: Path) -> dict[str, Any]:
     return {"title": title, "severity": severity, "pipeline_name": pipeline_name, "raw_alert": meta}
 
 
+def _validate_against_answer_key(state: dict[str, Any], answer_path: Path) -> tuple[bool, str]:
+    answer = yaml.safe_load(answer_path.read_text(encoding="utf-8")) or {}
+    expected_category = str(answer.get("root_cause_category") or "").strip()
+    required_keywords = [str(keyword).strip() for keyword in answer.get("required_keywords") or []]
+
+    root_cause = str(state.get("root_cause") or "").strip()
+    actual_category = str(state.get("root_cause_category") or "").strip()
+    evidence_text = " ".join(
+        [
+            root_cause,
+            " ".join(claim.get("claim", "") for claim in state.get("validated_claims", [])),
+            " ".join(claim.get("claim", "") for claim in state.get("non_validated_claims", [])),
+            " ".join(state.get("causal_chain", [])),
+            str(state.get("report") or ""),
+            str((state.get("problem_report") or {}).get("report_md") or ""),
+        ]
+    ).lower()
+
+    if not root_cause:
+        return False, "missing root cause"
+    if actual_category != expected_category:
+        return False, f"expected {expected_category!r}, got {actual_category!r}"
+
+    missing_keywords = [
+        keyword for keyword in required_keywords if keyword.lower() not in evidence_text
+    ]
+    if missing_keywords:
+        return False, f"missing keywords: {missing_keywords}"
+
+    return True, ""
+
+
 def run_file(path: Path) -> bool:
     print(f"\n  RCA TEST  {path.stem}")
 
@@ -49,10 +90,15 @@ def run_file(path: Path) -> bool:
     )
 
     passed = bool(state.get("root_cause"))
+    failure_reason = ""
+    if path.stem == "rds-connection-exhaustion":
+        passed, failure_reason = _validate_against_answer_key(state, SYNTHETIC_RDS_ANSWER)
+
     category = state.get("root_cause_category") or "—"
     mark = "\033[1;32m●\033[0m" if passed else "\033[1;31m●\033[0m"
     status = "pass" if passed else "fail"
-    print(f"\n  {mark}  {status}  {path.stem}  {category}")
+    suffix = f"  {failure_reason}" if failure_reason else ""
+    print(f"\n  {mark}  {status}  {path.stem}  {category}{suffix}")
     return passed
 
 

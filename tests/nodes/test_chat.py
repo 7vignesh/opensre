@@ -30,27 +30,23 @@ class _AnthropicModule:
 
 class _RecordingLLM:
     """A tiny deterministic LLM stub that records the prompt passed and
-    returns a label based on whether the prompt or user message contains
-    synthetic alert indicators. This allows tests to assert prompt contents
-    and that the router will route to `tracer_data` when prompts include
-    the expected alert-field cues.
+    returns a label based only on the user message.
+
+    This keeps routing behavior independent from the router system prompt so
+    prompt-text assertions can be tested separately.
     """
 
     def __init__(self) -> None:
         self.last_prompt: str | None = None
 
     def invoke(self, messages: list[dict[str, str]]):
-        # Normalize into a single string for inspection
-        parts: list[str] = []
-        for m in messages:
-            parts.append(str(m.get("content", "")))
-        prompt = "\n".join(parts)
-        self.last_prompt = prompt
+        user_message = "\n".join(
+            str(m.get("content", "")) for m in messages if m.get("role") == "user"
+        )
+        self.last_prompt = "\n".join(str(m.get("content", "")) for m in messages)
 
-        # Heuristic: if the system prompt or user message mentions alert-like
-        # fields, return tracer_data; otherwise return general.
         cue_tokens = ["alertname", "state=alerting", "db_instance_identifier", "synthetic"]
-        label = "tracer_data" if any(tok in prompt for tok in cue_tokens) else "general"
+        label = "tracer_data" if any(tok in user_message for tok in cue_tokens) else "general"
 
         return MagicMock(content=label)
 
