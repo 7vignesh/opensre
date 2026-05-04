@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 import tests.e2e.rca.run_rca_test as rca_runner
-from tests.e2e.rca.run_rca_test import _validate_against_answer_key
 
 
 def test_validate_against_answer_key_passes_for_expected_diagnosis(tmp_path: Path) -> None:
@@ -33,7 +32,7 @@ def test_validate_against_answer_key_passes_for_expected_diagnosis(tmp_path: Pat
         "problem_report": {"report_md": ""},
     }
 
-    passed, reason = _validate_against_answer_key(state, answer_path)
+    passed, reason = rca_runner._validate_against_answer_key(state, answer_path)
 
     assert passed is True
     assert reason == ""
@@ -63,7 +62,7 @@ def test_validate_against_answer_key_reports_missing_keywords(tmp_path: Path) ->
         "problem_report": {"report_md": ""},
     }
 
-    passed, reason = _validate_against_answer_key(state, answer_path)
+    passed, reason = rca_runner._validate_against_answer_key(state, answer_path)
 
     assert passed is False
     assert "missing keywords" in reason
