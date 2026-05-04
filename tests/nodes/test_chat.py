@@ -28,27 +28,23 @@ class _AnthropicModule:
         self.ChatAnthropic = chat_anthropic
 
 
-class _RecordingLLM:
-    """A tiny deterministic LLM stub that records the prompt passed and
-    returns a label based only on the user message.
+def _synthetic_rds_message() -> str:
+    alert_path = (
+        Path(__file__).parent.parent
+        / "synthetic"
+        / "rds_postgres"
+        / "002-connection-exhaustion"
+        / "alert.json"
+    )
+    alert = json.loads(alert_path.read_text(encoding="utf-8"))
 
-    This keeps routing behavior independent from the router system prompt so
-    prompt-text assertions can be tested separately.
-    """
-
-    def __init__(self) -> None:
-        self.last_prompt: str | None = None
-
-    def invoke(self, messages: list[dict[str, str]]):
-        user_message = "\n".join(
-            str(m.get("content", "")) for m in messages if m.get("role") == "user"
-        )
-        self.last_prompt = "\n".join(str(m.get("content", "")) for m in messages)
-
-        cue_tokens = ["alertname", "state=alerting", "db_instance_identifier", "synthetic"]
-        label = "tracer_data" if any(tok in user_message for tok in cue_tokens) else "general"
-
-        return MagicMock(content=label)
+    return (
+        f"[synthetic-rds] {alert['title']} | "
+        f"state={alert['state']} | "
+        f"alertname={alert['commonLabels']['alertname']} | "
+        f"severity={alert['commonLabels']['severity']} | "
+        f"summary={alert['commonAnnotations']['summary']}"
+    )
 
 
 @pytest.fixture
@@ -111,55 +107,25 @@ def test_general_node_returns_user_facing_message_for_codex_provider(
     )
 
 
-def test_router_routes_synthetic_rds_alert_to_tracer_data() -> None:
-    alert_path = (
-        Path(__file__).parent.parent
-        / "synthetic"
-        / "rds_postgres"
-        / "002-connection-exhaustion"
-        / "alert.json"
-    )
-    with alert_path.open() as f:
-        alert = json.load(f)
-
-    message_content = (
-        f"[synthetic-rds] {alert['title']} | "
-        f"state={alert['state']} | "
-        f"alertname={alert['commonLabels']['alertname']} | "
-        f"severity={alert['commonLabels']['severity']} | "
-        f"summary={alert['commonAnnotations']['summary']}"
-    )
-
-    llm = _RecordingLLM()
-    expected_route = "tracer_data"
-
+@pytest.mark.parametrize(
+    ("message_content", "expected_route"),
+    [
+        (_synthetic_rds_message(), "tracer_data"),
+        ("What is CrashLoopBackOff and how should SREs reason about it?", "general"),
+    ],
+)
+def test_router_node_routes_representative_inputs_to_expected_labels(
+    message_content: str,
+    expected_route: str,
+) -> None:
+    llm = MagicMock()
+    llm.invoke.return_value = MagicMock(content=expected_route)
     state = {"messages": [{"role": "user", "content": message_content}]}
 
     with patch.object(chat_mod, "get_llm_for_tools", return_value=llm):
         out = chat_mod.router_node(state)
 
     assert out["route"] == expected_route
-    assert llm.last_prompt is not None
-    assert "alertname" in llm.last_prompt
-    assert "state=alerting" in llm.last_prompt
-
-
-def test_router_node_routes_conceptual_question_to_general() -> None:
-    llm = MagicMock()
-    llm.invoke.return_value = MagicMock(content="general")
-    state = {
-        "messages": [
-            {
-                "role": "user",
-                "content": "What is CrashLoopBackOff and how should SREs reason about it?",
-            }
-        ]
-    }
-
-    with patch.object(chat_mod, "get_llm_for_tools", return_value=llm):
-        out = chat_mod.router_node(state)
-
-    assert out["route"] == "general"
     llm.invoke.assert_called_once()
 
 

@@ -19,13 +19,6 @@ import yaml
 from app.pipeline.runners import run_investigation
 
 RCA_DIR = Path(__file__).parent
-SYNTHETIC_RDS_ANSWER = (
-    Path(__file__).resolve().parents[2]
-    / "synthetic"
-    / "rds_postgres"
-    / "002-connection-exhaustion"
-    / "answer.yml"
-)
 
 
 def _parse_alert_md(path: Path) -> dict[str, Any]:
@@ -37,12 +30,19 @@ def _parse_alert_md(path: Path) -> dict[str, Any]:
 
     meta_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     meta: dict[str, Any] = json.loads(meta_match.group(1)) if meta_match else {}
+    answer_key_path = meta.get("answer_key_path")
 
     labels = meta.get("commonLabels", {})
     severity = labels.get("severity", "critical")
     pipeline_name = labels.get("pipeline_name") or labels.get("grafana_folder") or "unknown"
 
-    return {"title": title, "severity": severity, "pipeline_name": pipeline_name, "raw_alert": meta}
+    return {
+        "title": title,
+        "severity": severity,
+        "pipeline_name": pipeline_name,
+        "raw_alert": meta,
+        "answer_key_path": answer_key_path,
+    }
 
 
 def _validate_against_answer_key(state: dict[str, Any], answer_path: Path) -> tuple[bool, str]:
@@ -91,8 +91,12 @@ def run_file(path: Path) -> bool:
 
     passed = bool(state.get("root_cause"))
     failure_reason = ""
-    if path.stem == "rds-connection-exhaustion":
-        passed, failure_reason = _validate_against_answer_key(state, SYNTHETIC_RDS_ANSWER)
+    answer_key_path = alert.get("answer_key_path")
+    if answer_key_path:
+        passed, failure_reason = _validate_against_answer_key(
+            state,
+            (RCA_DIR.parents[2] / str(answer_key_path)).resolve(),
+        )
 
     category = state.get("root_cause_category") or "—"
     mark = "\033[1;32m●\033[0m" if passed else "\033[1;31m●\033[0m"

@@ -35,6 +35,7 @@ Database connection exhaustion alert on payments-prod. The instance has reached 
     "service": "rds",
     "engine": "postgres"
   },
+  "answer_key_path": "tests/synthetic/rds_postgres/002-connection-exhaustion/answer.yml",
   "commonAnnotations": {
     "summary": "DatabaseConnections reached 98% of max_connections and application traffic started receiving too many clients errors.",
     "error": "remaining connection slots are reserved for non-replication superuser connections",
