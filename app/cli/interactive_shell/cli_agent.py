@@ -44,7 +44,9 @@ _ACTION_RULE = (
     '`{"action":"switch_toolcall_model","model":"claude-opus-4-7"}` '
     "to change ONLY the toolcall model on the currently active provider; "
     '`{"action":"slash","command":"/model show"}` where command is one of '
-    "/model show, /list models, /health, /doctor, /version. For ordinary "
+    "/model show, /list models, /health, /doctor, /version; "
+    '`{"action":"run_cli_command","args":"<subcommand> <flags>"}` '
+    "to run any opensre subcommand (agent is blocked). For ordinary "
     "questions, return normal Markdown."
 )
 
@@ -269,6 +271,16 @@ def _execute_action_plan(
             session.record("slash", command)
             console.print(f"[bold]$ {escape(command)}[/bold]")
             dispatch_slash(command, session, console)
+            continue
+
+        if kind == "run_cli_command":
+            args = str(action.get("args", "")).strip()
+            if not args:
+                console.print("[red]missing args for run_cli_command action[/red]")
+                continue
+            from app.cli.interactive_shell.action_executor import run_opensre_cli_command
+
+            run_opensre_cli_command(args, session, console)
             continue
 
         console.print(f"[red]unsupported action:[/red] {escape(kind or '?')}")
