@@ -292,14 +292,17 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
 
     task = session.task_registry.create(TaskKind.CLI_COMMAND)
     task.mark_running()
+    stderr_buf: tempfile.SpooledTemporaryFile[bytes] = tempfile.SpooledTemporaryFile(  # type: ignore[type-arg] # noqa: SIM115
+        max_size=_SYNTHETIC_DIAG_CHARS * 2
+    )
     try:
         proc = subprocess.Popen(
             argv_list,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_buf,
         )
     except Exception as exc:  # noqa: BLE001
+        stderr_buf.close()
         task.mark_failed(str(exc))
         console.print(f"[red]failed to start:[/red] {escape(str(exc))}")
         return True
@@ -326,24 +329,28 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
         try:
             if timed_out:
                 task.mark_failed(f"timed out after {SHELL_COMMAND_TIMEOUT_SECONDS}s")
+                stderr_buf.close()
                 return
             if terminated_by_watcher and task.cancel_requested.is_set():
                 task.mark_cancelled()
+                stderr_buf.close()
                 return
 
-            stdout, stderr = proc.communicate()
-            if proc.returncode == 0:
+            code = proc.returncode
+            if code == 0:
                 task.mark_completed()
-                if stdout:
-                    print_command_output(console, stdout)
             else:
-                task.mark_failed(f"exit code {proc.returncode}")
-                console.print(f"[red]command failed (exit {proc.returncode}):[/red]")
-                if stderr:
-                    console.print(f"[dim]{escape(stderr)}[/dim]")
+                diag = read_diag(stderr_buf)
+                error_msg = f"exit code {code}" + (f": {diag}" if diag else "")
+                task.mark_failed(error_msg)
+                console.print(f"[red]command failed (exit {code}):[/red]")
+                if diag:
+                    console.print(f"[dim]{escape(diag)}[/dim]")
         except Exception as exc:  # noqa: BLE001
             task.mark_failed(str(exc))
             console.print(f"[red]error:[/red] {escape(str(exc))}")
+        finally:
+            stderr_buf.close()
 
     thread = threading.Thread(target=_watch, daemon=True)
     thread.start()
