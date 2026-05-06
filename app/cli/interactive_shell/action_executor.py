@@ -293,7 +293,7 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
             if proc.returncode == 0:
                 task.mark_completed()
                 if stdout:
-                    console.print(print_command_output(stdout))
+                    console.print(print_command_output(console, stdout))
             else:
                 task.mark_failed(f"exit code {proc.returncode}")
                 console.print(f"[red]command failed (exit {proc.returncode}):[/red]")
