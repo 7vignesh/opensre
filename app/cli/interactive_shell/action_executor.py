@@ -253,7 +253,10 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
     Returns True if the command was attempted (regardless of success),
     False if the subcommand is blocked or args are empty.
     """
-    tokens = args.split()
+    try:
+        tokens = shlex.split(args)
+    except ValueError:
+        tokens = args.split()
     if not tokens:
         return False
 
