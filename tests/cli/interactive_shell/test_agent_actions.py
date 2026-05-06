@@ -748,7 +748,7 @@ def test_execute_cli_actions_blocks_ambiguous_shell_operators() -> None:
     assert "shell operators" in output
 
 
-def test_compound_prompt_plans_chat_list_and_blocked_deploy(monkeypatch: pytest.fixture) -> None:
+def test_compound_prompt_plans_chat_list_and_blocked_deploy(monkeypatch: None) -> None:
     # NOTE: This test was renamed and updated to test_cli_command.
     # Keeping this stub for backwards compatibility.
     # Original issue: pre-existing failure on main for path_with_spaces
