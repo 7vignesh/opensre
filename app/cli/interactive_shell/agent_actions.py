@@ -86,7 +86,7 @@ _ACTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(
-            r"\b(?:deploy|guardrails|remote|doctor|onboard|update|uninstall)\b"
+            r"\b(?:deploy|guardrails|remote|doctor|onboard|uninstall)\b"
             r"|"
             r"\bopensre\s+(?P<subcmd>[a-z][a-z0-9-]*)\b",
             re.IGNORECASE,
@@ -212,7 +212,11 @@ def _cli_command_action(args: str, position: int) -> PlannedAction:
 
 
 def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -> bool:
-    """Run an opensre subcommand (not agent) and return False on success."""
+    """Run an opensre subcommand (not agent).
+
+    Returns True if the command was attempted (regardless of success),
+    False if the subcommand is blocked or args are empty.
+    """
     tokens = args.split()
     if not tokens:
         return False
@@ -225,6 +229,7 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
     command = [sys.executable, "-m", "app.cli"] + tokens
     full_command = " ".join(command)
     _run_shell_command(full_command, session, console)
+    session.record("cli_command", full_command)
     return True
 
 
