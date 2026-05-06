@@ -265,6 +265,16 @@ def run_pwd_command(command: str, session: ReplSession, console: Console) -> Non
 
 _OPENSRE_BLOCKED_SUBCOMMANDS: frozenset[str] = frozenset({"agent"})
 
+_READ_ONLY_OPENSRE_SUBCOMMANDS: frozenset[str] = frozenset(
+    {
+        "health",
+        "version",
+        "list",
+        "status",
+        "show",
+    }
+)
+
 
 def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -> bool:
     """Run an opensre subcommand (not agent).
@@ -283,6 +293,40 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
     if first_token in _OPENSRE_BLOCKED_SUBCOMMANDS:
         console.print(f"[red]Cannot run `opensre {first_token}`: subcommand is blocked.[/red]")
         return False
+
+    command_classification = (
+        "read_only" if first_token in _READ_ONLY_OPENSRE_SUBCOMMANDS else "mutating"
+    )
+    from app.cli.interactive_shell.execution_policy import ExecutionPolicyResult, execution_allowed
+
+    if command_classification == "read_only":
+        policy_result = ExecutionPolicyResult(
+            verdict="allow",
+            action_type="cli_command",
+            reason=None,
+            hint=None,
+            shell_classification=command_classification,
+        )
+    else:
+        policy_result = ExecutionPolicyResult(
+            verdict="ask",
+            action_type="cli_command",
+            reason="opensre subcommand requires confirmation",
+            hint="Use a read-only subcommand (health, version, list, status, show)",
+            shell_classification=command_classification,
+        )
+
+    if not execution_allowed(
+        policy_result,
+        session=session,
+        console=console,
+        action_summary=f"$ opensre {' '.join(tokens)}",
+        confirm_fn=None,
+        is_tty=None,
+        action_already_listed=True,
+    ):
+        session.record("cli_command", f"opensre {' '.join(tokens)}", ok=False)
+        return True
 
     argv_list = [sys.executable, "-m", "app.cli"] + tokens
     display_command = f"opensre {' '.join(tokens)}"
