@@ -38,6 +38,15 @@ ACTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "/version",
     ),
+    (
+        re.compile(
+            r"\b(?:deploy|guardrails|remote|doctor|onboard|uninstall)\b"
+            r"|"
+            r"\bopensre\s+(?P<subcmd>[a-z][a-z0-9-]*)\b",
+            re.IGNORECASE,
+        ),
+        "cli_command",
+    ),
 )
 
 SAMPLE_ALERT_RE = re.compile(
@@ -144,6 +153,10 @@ def synthetic_test_action(suite_name: str, position: int) -> PlannedAction:
 
 def llm_provider_action(provider: str, position: int) -> PlannedAction:
     return PlannedAction(kind="llm_provider", content=provider, position=position)
+
+
+def cli_command_action(args: str, position: int) -> PlannedAction:
+    return PlannedAction(kind="cli_command", content=args, position=position)
 
 
 def strip_wrapping_quotes(command: str) -> str:

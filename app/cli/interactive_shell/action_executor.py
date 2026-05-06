@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, FrozenSet
 
 from rich.console import Console
 from rich.markup import escape
@@ -125,7 +125,13 @@ def watch_synthetic_subprocess(
     threading.Thread(target=_run, daemon=True, name=f"synthetic-{task.task_id}").start()
 
 
-def run_shell_command(command: str, session: ReplSession, console: Console) -> None:
+def run_shell_command(
+    command: str,
+    session: ReplSession,
+    console: Console,
+    *,
+    argv: list[str] | None = None,
+) -> None:
     console.print(f"[bold]$ {escape(command)}[/bold]")
     parsed = parse_shell_command(command, is_windows=_intent_parser.IS_WINDOWS)
     decision = evaluate_policy(parsed=parsed)
@@ -160,10 +166,12 @@ def run_shell_command(command: str, session: ReplSession, console: Console) -> N
     if use_shell:
         console.print("[dim]explicit shell passthrough enabled[/dim]")
 
+    exec_argv = argv if argv is not None else parsed.argv
+
     try:
         result = execute_shell_command(
             command=parsed.command,
-            argv=parsed.argv,
+            argv=exec_argv,
             use_shell=use_shell,
             timeout_seconds=SHELL_COMMAND_TIMEOUT_SECONDS,
             max_output_chars=_MAX_COMMAND_OUTPUT_CHARS,
@@ -234,6 +242,31 @@ def run_pwd_command(command: str, session: ReplSession, console: Console) -> Non
 
     console.print(Text(str(Path.cwd())))
     session.record("shell", command)
+
+
+_OPENSRE_BLOCKED_SUBCOMMANDS: FrozenSet[str] = frozenset({"agent"})
+
+
+def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -> bool:
+    """Run an opensre subcommand (not agent).
+
+    Returns True if the command was attempted (regardless of success),
+    False if the subcommand is blocked or args are empty.
+    """
+    tokens = args.split()
+    if not tokens:
+        return False
+
+    first_token = tokens[0].lower()
+    if first_token in _OPENSRE_BLOCKED_SUBCOMMANDS:
+        console.print(f"[red]Cannot run `opensre {first_token}`: subcommand is blocked.[/red]")
+        return False
+
+    argv_list = [sys.executable, "-m", "app.cli"] + tokens
+    full_command = " ".join(argv_list)
+    run_shell_command(full_command, session, console, argv=argv_list)
+    session.record("cli_command", full_command)
+    return True
 
 
 def run_sample_alert(template_name: str, session: ReplSession, console: Console) -> None:
