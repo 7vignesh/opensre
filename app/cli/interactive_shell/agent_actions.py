@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from app.cli.interactive_shell.action_executor import (
+    run_opensre_cli_command,
     run_sample_alert,
     run_shell_command,
     run_synthetic_test,
@@ -52,6 +53,8 @@ def execute_cli_actions(message: str, session: ReplSession, console: Console) ->
             session.record("slash", f"/model set {action.content}")
         elif action.kind == "shell":
             run_shell_command(action.content, session, console)
+        elif action.kind == "cli_command":
+            run_opensre_cli_command(action.content, session, console)
         elif action.kind == "sample_alert":
             run_sample_alert(action.content, session, console)
         else:
