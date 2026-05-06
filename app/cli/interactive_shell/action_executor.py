@@ -265,7 +265,6 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
     argv_list = [sys.executable, "-m", "app.cli"] + tokens
     full_command = " ".join(argv_list)
     run_shell_command(full_command, session, console, argv=argv_list)
-    session.record("cli_command", full_command)
     return True
 
 

@@ -222,6 +222,9 @@ def _execute_action_plan(
             )
         elif kind == "slash":
             label = str(action.get("command", "")).strip()
+        elif kind == "run_cli_command":
+            args = str(action.get("args", "")).strip()
+            label = f"opensre {args}" if args else "opensre"
         else:
             label = f"unsupported action: {kind or '?'}"
         console.print(f"[dim]{index}.[/dim] [{TERMINAL_ACCENT_BOLD}]{escape(label)}[/]")
