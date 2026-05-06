@@ -220,6 +220,8 @@ def _execute_action_plan(
             )
         elif kind == "slash":
             label = str(action.get("command", "")).strip()
+        elif kind == "run_cli_command":
+            label = f"opensre {str(action.get('args', '')).strip()}"
         else:
             label = f"unsupported action: {kind or '?'}"
         console.print(f"[dim]{index}.[/dim] [{TERMINAL_ACCENT_BOLD}]{escape(label)}[/]")
@@ -276,7 +278,6 @@ def _execute_action_plan(
             if not args:
                 console.print("[red]missing args for run_cli_command action[/red]")
                 continue
-            console.print(f"[bold]$ opensre {escape(args)}[/bold]")
             from app.cli.interactive_shell.agent_actions import run_opensre_cli_command
 
             run_opensre_cli_command(args, session, console)
