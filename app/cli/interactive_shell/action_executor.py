@@ -266,8 +266,46 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
         return False
 
     argv_list = [sys.executable, "-m", "app.cli"] + tokens
-    full_command = " ".join(argv_list)
-    run_shell_command(full_command, session, console, argv=argv_list)
+    display_command = f"opensre {' '.join(tokens)}"
+    console.print(f"[bold]$ {display_command}[/bold]")
+
+    session.record("cli_command", display_command)
+
+    task = session.task_registry.create(TaskKind.CLI_COMMAND)
+    task.mark_running()
+    try:
+        proc = subprocess.Popen(
+            argv_list,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        task.mark_failed(str(exc))
+        console.print(f"[red]failed to start:[/red] {escape(str(exc))}")
+        return True
+
+    task.attach_process(proc)
+
+    def _watch() -> None:
+        try:
+            stdout, stderr = proc.communicate()
+            if proc.returncode == 0:
+                task.mark_completed()
+                if stdout:
+                    console.print(print_command_output(stdout))
+            else:
+                task.mark_failed(f"exit code {proc.returncode}")
+                console.print(f"[red]command failed (exit {proc.returncode}):[/red]")
+                if stderr:
+                    console.print(f"[dim]{escape(stderr)}[/dim]")
+        except Exception as exc:  # noqa: BLE001
+            task.mark_failed(str(exc))
+            console.print(f"[red]error:[/red] {escape(str(exc))}")
+
+    thread = threading.Thread(target=_watch, daemon=True)
+    thread.start()
+    console.print("[dim]started.[/dim]")
     return True
 
 
