@@ -43,7 +43,7 @@ ACTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
             r"\b(?:run|execute|start|use|deploy)\b.{0,60}?"
             r"\b(?:deploy|guardrails|remote|doctor|onboard|uninstall)\b"
             r"|"
-            r"\bopensre\s+(?P<subcmd>[a-z][a-z0-9-]*)\b",
+            r"\bopensre\s+(?P<subcmd>(?!health|version|doctor)[a-z][a-z0-9-]*)\b",
             re.IGNORECASE,
         ),
         "cli_command",
