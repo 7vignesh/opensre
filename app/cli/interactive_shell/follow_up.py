@@ -9,9 +9,9 @@ from typing import Any
 from rich.console import Console
 from rich.markup import escape
 
-from app.cli.interactive_shell.loaders import llm_loader
 from app.cli.interactive_shell.session import ReplSession
-from app.cli.interactive_shell.theme import TERMINAL_ACCENT_BOLD, TERMINAL_ERROR
+from app.cli.interactive_shell.streaming import STREAM_LABEL_ANSWER, stream_to_console
+from app.cli.interactive_shell.theme import TERMINAL_ERROR
 
 _logger = logging.getLogger(__name__)
 
@@ -95,20 +95,20 @@ def answer_follow_up(question: str, session: ReplSession, console: Console) -> N
     )
 
     try:
-        with llm_loader(console):
-            client = get_llm_for_reasoning()
-            response = client.invoke(prompt)
+        client = get_llm_for_reasoning()
+        stream_to_console(
+            console,
+            label=STREAM_LABEL_ANSWER,
+            chunks=client.invoke_stream(prompt),
+        )
+    except KeyboardInterrupt:
+        # Cancel just this response and stay in the REPL. A second Ctrl+C
+        # at the prompt exits the shell.
+        console.print("[dim]· cancelled[/dim]")
+        return
     except Exception as exc:  # noqa: BLE001
         console.print(f"[{TERMINAL_ERROR}]follow-up failed:[/] {escape(str(exc))}")
         return
-
-    text = getattr(response, "content", None) or str(response)
-    # LLM output routinely contains brackets ([ERROR], [OOMKilled], ISO
-    # timestamps, service names) that Rich would interpret as markup tags and
-    # silently drop.  Escape everything that isn't our own markup.
-    console.print()
-    console.print(f"[{TERMINAL_ACCENT_BOLD}]answer:[/] {escape(text)}")
-    console.print()
 
 
 __all__ = ["answer_follow_up"]

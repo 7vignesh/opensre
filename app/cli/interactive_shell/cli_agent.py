@@ -11,12 +11,12 @@ from rich.markup import escape
 
 from app.cli.interactive_shell.cli_reference import build_cli_reference_text
 from app.cli.interactive_shell.grounding_diagnostics import log_grounding_cache_diagnostics
-from app.cli.interactive_shell.loaders import llm_loader
 from app.cli.interactive_shell.prompt_rules import (
     CLI_ASSISTANT_MARKDOWN_RULE,
     INTERACTIVE_SHELL_TERMINOLOGY_RULE,
 )
 from app.cli.interactive_shell.session import ReplSession
+from app.cli.interactive_shell.streaming import STREAM_LABEL_ASSISTANT, stream_to_console
 from app.cli.interactive_shell.theme import TERMINAL_ACCENT_BOLD
 
 # Cap stored (user, assistant) pairs; list holds 2 entries per turn.
@@ -136,36 +136,6 @@ def _parse_action_plan(text: str) -> list[dict[str, object]]:
     ]
 
 
-def _response_text(response: object) -> str:
-    """Extract text from heterogeneous LLM response content payloads."""
-    content = getattr(response, "content", None)
-    if content is None:
-        return str(response)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, dict):
-        text_value = content.get("text")
-        return text_value if isinstance(text_value, str) else str(content)
-    if isinstance(content, list):
-        blocks: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                blocks.append(item)
-                continue
-            if isinstance(item, dict):
-                text_value = item.get("text")
-                blocks.append(text_value if isinstance(text_value, str) else str(item))
-                continue
-            text_value = getattr(item, "text", None)
-            blocks.append(text_value if isinstance(text_value, str) else str(item))
-        joined = "\n".join(part for part in blocks if part.strip()).strip()
-        return joined or str(content)
-    text_value = getattr(content, "text", None)
-    if isinstance(text_value, str):
-        return text_value
-    return str(content)
-
-
 def _execute_action_plan(
     actions: list[dict[str, object]],
     session: ReplSession,
@@ -191,7 +161,7 @@ def _execute_action_plan(
     )
 
     console.print()
-    console.print(f"[{TERMINAL_ACCENT_BOLD}]assistant:[/]")
+    console.print(f"[{TERMINAL_ACCENT_BOLD}]{STREAM_LABEL_ASSISTANT}:[/]")
     console.print("[dim]Requested actions:[/dim]")
     for index, action in enumerate(actions, start=1):
         kind = str(action.get("action", "")).strip()
@@ -353,14 +323,25 @@ def answer_cli_agent(
     prompt = f"{system}\n{user_block}"
 
     try:
-        with llm_loader(console):
-            client = get_llm_for_reasoning()
-            response = client.invoke(prompt)
+        client = get_llm_for_reasoning()
+        text_str = stream_to_console(
+            console,
+            label=STREAM_LABEL_ASSISTANT,
+            chunks=client.invoke_stream(prompt),
+            # Suppress the live render if the model is emitting a JSON action
+            # plan: that payload is consumed by ``_execute_action_plan`` and
+            # would otherwise leak raw braces to the user (#1263).
+            suppress_if_starts_with="{",
+        )
+    except KeyboardInterrupt:
+        # Cancel just this response and stay in the REPL. A second Ctrl+C
+        # at the prompt exits the shell.
+        console.print("[dim]· cancelled[/dim]")
+        return
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]assistant failed:[/red] {escape(str(exc))}")
         return
 
-    text_str = _response_text(response)
     actions = _parse_action_plan(text_str)
     if _execute_action_plan(actions, session, console):
         _record_cli_agent_turn(session, message, text_str)
@@ -368,13 +349,14 @@ def answer_cli_agent(
 
     _record_cli_agent_turn(session, message, text_str)
 
-    console.print()
-    console.print(f"[{TERMINAL_ACCENT_BOLD}]assistant:[/]")
-    # Render the answer as Markdown so tables, bold, lists, and code spans
-    # display correctly in the terminal instead of leaking raw `**bold**`,
-    # `| col |` table syntax, etc. (#604).
-    console.print(Markdown(text_str))
-    console.print()
+    # If the response was suppressed (looked like a JSON action plan) but no
+    # valid actions parsed, render it now as Markdown so the user sees
+    # something. The non-suppressed path was already rendered live.
+    if text_str.lstrip().startswith("{") and text_str.strip():
+        console.print()
+        console.print(f"[{TERMINAL_ACCENT_BOLD}]{STREAM_LABEL_ASSISTANT}:[/]")
+        console.print(Markdown(text_str))
+        console.print()
 
 
 __all__ = ["answer_cli_agent"]
