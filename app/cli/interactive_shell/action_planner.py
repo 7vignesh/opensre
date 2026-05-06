@@ -36,8 +36,11 @@ def plan_clause_actions(
         if match is None or command in seen_slash:
             continue
         if command == "cli_command":
-            subcmd = match.group("subcmd") or match.group("subcmd2") or match.group("subcmd3")
-            rest = match.group("rest") or match.group("rest2") or match.group("rest3") or ""
+            groups = match.groupdict()
+            subcmd = groups.get("subcmd") or groups.get("subcmd2")
+            if subcmd is None:
+                continue
+            rest = groups.get("rest") or groups.get("rest2") or ""
             args = f"{subcmd} {rest}".strip() if rest else subcmd
             if subcmd not in seen_slash:
                 planned.append(cli_command_action(args, clause.position + match.start()))

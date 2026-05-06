@@ -42,9 +42,7 @@ ACTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             r"\bopensre\s+(?P<subcmd>(?!health|version)[a-z][a-z0-9-]*)(?:\s+(?P<rest>.*))?\b"
             r"|"
-            r"\b(?:run|execute)\s+opensre\s+(?P<subcmd2>[a-z][a-z0-9-]*)(?:\s+(?P<rest2>.*))?\b"
-            r"|"
-            r"--\s+(?P<subcmd3>(?:deploy|guardrails|remote|onboard|uninstall))(?:\s+(?P<rest3>.*))?\b",
+            r"\b(?:run|execute)\s+opensre\s+(?P<subcmd2>[a-z][a-z0-9-]*)(?:\s+(?P<rest2>.*))?\b",
             re.IGNORECASE,
         ),
         "cli_command",

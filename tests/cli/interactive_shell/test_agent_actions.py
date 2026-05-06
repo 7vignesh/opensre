@@ -202,6 +202,17 @@ def test_compound_prompt_plans_chat_list_and_cli_command() -> None:
     assert plan_cli_actions(message) == ["/list integrations", "deploy"]
 
 
+def test_cli_command_requires_explicit_opensre_context() -> None:
+    message = "the tool uses -- deploy as an argument separator"
+
+    assert plan_terminal_tasks(message) == []
+    assert plan_cli_actions(message) == []
+
+
+def test_cli_command_preserves_flags_after_explicit_opensre_prefix() -> None:
+    assert plan_cli_actions("please run opensre deploy --dry-run") == ["deploy --dry-run"]
+
+
 def test_services_version_deploy_prompt_plans_all_actions() -> None:
     message = (
         "tell me which services are connected AND then tell me the current CLI version "
