@@ -755,10 +755,14 @@ def test_compound_prompt_plans_chat_list_and_blocked_deploy(monkeypatch: None) -
     pass
 
 
-def test_execute_cli_actions_handles_path_with_spaces(monkeypatch: object) -> None:
-    pytest.skip(
-        "SKIPPED: This test fails on main due to a pre-existing issue with spaces in paths."
-    )
+def test_execute_cli_actions_handles_path_with_spaces() -> None:
+    session = ReplSession()
+    console, buf = _capture()
+    result = execute_cli_actions('run cat "/tmp/file with spaces.txt"', session, console)
+    assert result is True
+    assert session.history[-1]["type"] == "shell"
+    output = buf.getvalue()
+    assert "/tmp/file with spaces.txt" in output
 
 
 def test_execute_cli_actions_rejects_malformed_shell_input() -> None:
