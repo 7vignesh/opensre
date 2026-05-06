@@ -37,6 +37,7 @@ def plan_clause_actions(
             continue
         if command == "cli_command":
             subcmd = match.group("subcmd") if match.lastgroup == "subcmd" else match.group(0)
+            subcmd = subcmd.split()[-1] if " " in subcmd else subcmd
             planned.append(cli_command_action(subcmd, clause.position + match.start()))
             continue
         if command == "/list integrations" and mentioned_services:
@@ -120,8 +121,8 @@ def plan_actions(message: str) -> list[PlannedAction]:
 
 
 def plan_cli_actions(message: str) -> list[str]:
-    """Return safe read-only slash commands requested by a natural-language turn."""
-    return [action.content for action in plan_actions(message) if action.kind == "slash"]
+    """Return safe read-only slash commands and CLI commands requested by a natural-language turn."""
+    return [action.content for action in plan_actions(message) if action.kind in ("slash", "cli_command")]
 
 
 def plan_terminal_tasks(message: str) -> list[str]:

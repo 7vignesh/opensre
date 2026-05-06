@@ -174,14 +174,14 @@ def test_execute_cli_actions_answers_discord_then_dispatches_datadog(
     assert "ran /integrations show datadog" in output
 
 
-def test_compound_prompt_plans_chat_list_and_blocked_deploy() -> None:
+def test_compound_prompt_plans_chat_list_and_cli_command() -> None:
     message = (
         "tell me how you are doing AND show me all the services we are connected to "
-        "AND then deploy OpenSRE to EC2"
+        "AND then run opensre deploy"
     )
 
-    assert plan_terminal_tasks(message) == ["slash"]
-    assert plan_cli_actions(message) == ["/list integrations"]
+    assert plan_terminal_tasks(message) == ["slash", "cli_command"]
+    assert plan_cli_actions(message) == ["/list integrations", "deploy"]
 
 
 def test_services_version_deploy_prompt_plans_all_actions() -> None:
