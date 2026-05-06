@@ -347,6 +347,7 @@ __all__ = [
     "SYNTHETIC_TEST_TIMEOUT_SECONDS",
     "read_diag",
     "run_cd_command",
+    "run_opensre_cli_command",
     "run_pwd_command",
     "run_sample_alert",
     "run_shell_command",
