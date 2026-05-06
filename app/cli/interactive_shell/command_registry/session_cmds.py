@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from app.cli.interactive_shell.banner import render_banner
-from app.cli.interactive_shell.command_registry.types import SlashCommand
+from app.cli.interactive_shell.command_registry.types import ExecutionTier, SlashCommand
 from app.cli.interactive_shell.rendering import repl_table
 from app.cli.interactive_shell.session import ReplSession
 from app.cli.interactive_shell.theme import TERMINAL_ACCENT_BOLD
@@ -37,6 +37,9 @@ def _cmd_trust(session: ReplSession, console: Console, args: list[str]) -> bool:
 
 
 def _cmd_status(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
+    from app.cli.interactive_shell.cli_reference import get_cli_reference_cache_stats
+    from app.cli.interactive_shell.docs_reference import get_docs_cache_stats
+
     table = repl_table(title="Session status", title_style=TERMINAL_ACCENT_BOLD, show_header=False)
     table.add_column("key", style="bold")
     table.add_column("value")
@@ -44,6 +47,18 @@ def _cmd_status(session: ReplSession, console: Console, args: list[str]) -> bool
     table.add_row("last investigation", "yes" if session.last_state else "none")
     table.add_row("trust mode", "on" if session.trust_mode else "off")
     table.add_row("provider", os.getenv("LLM_PROVIDER", "anthropic"))
+    cli_stats = get_cli_reference_cache_stats()
+    doc_stats = get_docs_cache_stats()
+    table.add_row(
+        "grounding cli cache",
+        f"hits={cli_stats['hits']} misses={cli_stats['misses']} "
+        f"cached={'yes' if cli_stats['cached'] else 'no'}",
+    )
+    table.add_row(
+        "grounding docs cache",
+        f"hits={doc_stats['hits']} misses={doc_stats['misses']} "
+        f"entries={doc_stats['currsize']}/{doc_stats['maxsize']}",
+    )
     acc = session.accumulated_context
     if acc:
         table.add_row("accumulated context", ", ".join(sorted(acc.keys())))
@@ -105,14 +120,35 @@ def _cmd_context(session: ReplSession, console: Console, args: list[str]) -> boo
     return True
 
 
+_TRUST_FIRST_ARGS: tuple[tuple[str, str], ...] = (
+    ("on", "enable trust mode (skip approval prompts)"),
+    ("off", "disable trust mode"),
+)
+
+_VERBOSE_FIRST_ARGS: tuple[tuple[str, str], ...] = (
+    ("on", "enable verbose logging"),
+    ("off", "disable verbose logging"),
+)
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand("/clear", "clear the screen and re-render the banner", _cmd_clear),
     SlashCommand("/reset", "clear session state (keeps trust mode)", _cmd_reset),
-    SlashCommand("/trust", "toggle trust mode ('/trust off' to disable)", _cmd_trust),
+    SlashCommand(
+        "/trust",
+        "toggle trust mode ('/trust off' to disable)",
+        _cmd_trust,
+        first_arg_completions=_TRUST_FIRST_ARGS,
+        execution_tier=ExecutionTier.EXEMPT,
+    ),
     SlashCommand("/status", "show session status", _cmd_status),
     SlashCommand("/context", "show accumulated infra context", _cmd_context),
     SlashCommand("/cost", "show token usage and session cost", _cmd_cost),
-    SlashCommand("/verbose", "toggle verbose logging ('/verbose off' to disable)", _cmd_verbose),
+    SlashCommand(
+        "/verbose",
+        "toggle verbose logging ('/verbose off' to disable)",
+        _cmd_verbose,
+        first_arg_completions=_VERBOSE_FIRST_ARGS,
+    ),
     SlashCommand("/compact", "trim old session history to free memory", _cmd_compact),
 ]
 

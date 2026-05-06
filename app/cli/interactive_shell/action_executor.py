@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +19,18 @@ from rich.markup import escape
 from rich.text import Text
 
 import app.cli.interactive_shell.intent_parser as _intent_parser
+from app.cli.interactive_shell.execution_policy import (
+    evaluate_investigation_launch,
+    evaluate_shell_from_parsed,
+    evaluate_synthetic_test_launch,
+    execution_allowed,
+)
 from app.cli.interactive_shell.rendering import print_command_output
 from app.cli.interactive_shell.session import ReplSession
 from app.cli.interactive_shell.shell_execution import execute_shell_command
-from app.cli.interactive_shell.shell_policy import evaluate_policy, parse_shell_command
+from app.cli.interactive_shell.shell_policy import parse_shell_command
 from app.cli.interactive_shell.tasks import TaskKind, TaskRecord
+from app.cli.interactive_shell.theme import TERMINAL_ERROR
 from app.cli.support.errors import OpenSREError
 
 SHELL_COMMAND_TIMEOUT_SECONDS = 120
@@ -131,18 +139,25 @@ def run_shell_command(
     console: Console,
     *,
     argv: list[str] | None = None,
+    confirm_fn: Callable[[str], str] | None = None,
+    is_tty: bool | None = None,
+    action_already_listed: bool = False,
 ) -> None:
-    console.print(f"[bold]$ {escape(command)}[/bold]")
     parsed = parse_shell_command(command, is_windows=_intent_parser.IS_WINDOWS)
-    decision = evaluate_policy(parsed=parsed)
-    if not decision.allow:
-        console.print(
-            f"[yellow]command blocked:[/yellow] {escape(decision.reason or 'not allowed')}"
-        )
-        if decision.hint:
-            console.print(f"[dim]{escape(decision.hint)}[/dim]")
+    policy = evaluate_shell_from_parsed(parsed)
+    if not execution_allowed(
+        policy,
+        session=session,
+        console=console,
+        action_summary=f"$ {command}",
+        confirm_fn=confirm_fn,
+        is_tty=is_tty,
+        action_already_listed=action_already_listed,
+    ):
         session.record("shell", command, ok=False)
         return
+
+    console.print(f"[bold]$ {escape(command)}[/bold]")
 
     argv_builtin = parsed.argv
     if argv_builtin is None and parsed.passthrough and parsed.command.strip():
@@ -188,10 +203,14 @@ def run_shell_command(
     print_command_output(console, result.stdout)
     print_command_output(console, result.stderr, style="red")
     ok = result.exit_code == 0
-    if not ok:
-        console.print(f"[red]exit code:[/red] {result.exit_code}")
-    elif not result.stdout and not result.stderr:
-        console.print("[dim]exit code: 0[/dim]")
+    had_stdout = bool((result.stdout or "").strip())
+    had_stderr = bool((result.stderr or "").strip())
+    if ok:
+        if not had_stdout and not had_stderr:
+            console.print("[dim]✓[/dim]")
+    else:
+        code = result.exit_code if result.exit_code is not None else "?"
+        console.print(f"[{TERMINAL_ERROR}]✗[/] exit {code}")
     session.record("shell", command, ok=ok)
 
 
@@ -244,96 +263,29 @@ def run_pwd_command(command: str, session: ReplSession, console: Console) -> Non
     session.record("shell", command)
 
 
-_OPENSRE_BLOCKED_SUBCOMMANDS: frozenset[str] = frozenset({"agent"})
-
-
-def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -> bool:
-    """Run an opensre subcommand (not agent).
-
-    Returns True if the command was attempted (regardless of success),
-    False if the subcommand is blocked or args are empty.
-    """
-    try:
-        tokens = shlex.split(args)
-    except ValueError:
-        tokens = args.split()
-    if not tokens:
-        return False
-
-    first_token = tokens[0].lower()
-    if first_token in _OPENSRE_BLOCKED_SUBCOMMANDS:
-        console.print(f"[red]Cannot run `opensre {first_token}`: subcommand is blocked.[/red]")
-        return False
-
-    argv_list = [sys.executable, "-m", "app.cli"] + tokens
-    display_command = f"opensre {' '.join(tokens)}"
-    console.print(f"[bold]$ {display_command}[/bold]")
-
-    session.record("cli_command", display_command)
-
-    task = session.task_registry.create(TaskKind.CLI_COMMAND)
-    task.mark_running()
-    try:
-        proc = subprocess.Popen(
-            argv_list,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        task.mark_failed(str(exc))
-        console.print(f"[red]failed to start:[/red] {escape(str(exc))}")
-        return True
-
-    task.attach_process(proc)
-    started_at = time.monotonic()
-
-    def _watch() -> None:
-        terminated_by_watcher = False
-        timed_out = False
-        while proc.poll() is None:
-            if time.monotonic() - started_at > SHELL_COMMAND_TIMEOUT_SECONDS:
-                timed_out = True
-                task.request_cancel()
-                terminate_child_process(proc)
-                terminated_by_watcher = True
-                break
-            if task.cancel_requested.is_set():
-                terminate_child_process(proc)
-                terminated_by_watcher = True
-                break
-            time.sleep(_SYNTHETIC_POLL_SECONDS)
-
-        try:
-            if timed_out:
-                task.mark_failed(f"timed out after {SHELL_COMMAND_TIMEOUT_SECONDS}s")
-                return
-            if terminated_by_watcher and task.cancel_requested.is_set():
-                task.mark_cancelled()
-                return
-
-            stdout, stderr = proc.communicate()
-            if proc.returncode == 0:
-                task.mark_completed()
-                if stdout:
-                    print_command_output(console, stdout)
-            else:
-                task.mark_failed(f"exit code {proc.returncode}")
-                console.print(f"[red]command failed (exit {proc.returncode}):[/red]")
-                if stderr:
-                    console.print(f"[dim]{escape(stderr)}[/dim]")
-        except Exception as exc:  # noqa: BLE001
-            task.mark_failed(str(exc))
-            console.print(f"[red]error:[/red] {escape(str(exc))}")
-
-    thread = threading.Thread(target=_watch, daemon=True)
-    thread.start()
-    console.print("[dim]started.[/dim]")
-    return True
-
-
-def run_sample_alert(template_name: str, session: ReplSession, console: Console) -> None:
+def run_sample_alert(
+    template_name: str,
+    session: ReplSession,
+    console: Console,
+    *,
+    confirm_fn: Callable[[str], str] | None = None,
+    is_tty: bool | None = None,
+    action_already_listed: bool = False,
+) -> None:
     from app.cli.investigation import run_sample_alert_for_session
+
+    policy = evaluate_investigation_launch(action_type="sample_alert")
+    if not execution_allowed(
+        policy,
+        session=session,
+        console=console,
+        action_summary=f"sample alert investigation ({template_name})",
+        confirm_fn=confirm_fn,
+        is_tty=is_tty,
+        action_already_listed=action_already_listed,
+    ):
+        session.record("alert", f"sample:{template_name}", ok=False)
+        return
 
     console.print(f"[bold]sample alert:[/bold] {escape(template_name)}")
     task = session.task_registry.create(TaskKind.INVESTIGATION)
@@ -369,9 +321,30 @@ def run_sample_alert(template_name: str, session: ReplSession, console: Console)
     session.record("alert", f"sample:{template_name}")
 
 
-def run_synthetic_test(suite_name: str, session: ReplSession, console: Console) -> None:
+def run_synthetic_test(
+    suite_name: str,
+    session: ReplSession,
+    console: Console,
+    *,
+    confirm_fn: Callable[[str], str] | None = None,
+    is_tty: bool | None = None,
+    action_already_listed: bool = False,
+) -> None:
     if suite_name != "rds_postgres":
         console.print(f"[red]unknown synthetic suite:[/red] {escape(suite_name)}")
+        session.record("synthetic_test", suite_name, ok=False)
+        return
+
+    policy = evaluate_synthetic_test_launch()
+    if not execution_allowed(
+        policy,
+        session=session,
+        console=console,
+        action_summary="opensre tests synthetic",
+        confirm_fn=confirm_fn,
+        is_tty=is_tty,
+        action_already_listed=action_already_listed,
+    ):
         session.record("synthetic_test", suite_name, ok=False)
         return
 

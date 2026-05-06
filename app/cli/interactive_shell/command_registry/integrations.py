@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from app.cli.interactive_shell.command_registry import repl_data
-from app.cli.interactive_shell.command_registry.types import SlashCommand
+from app.cli.interactive_shell.command_registry.types import ExecutionTier, SlashCommand
 from app.cli.interactive_shell.rendering import (
     render_integrations_table,
     render_mcp_table,
@@ -120,23 +120,47 @@ def _cmd_list(session: ReplSession, console: Console, args: list[str]) -> bool: 
     return True
 
 
+_LIST_FIRST_ARGS: tuple[tuple[str, str], ...] = (
+    ("integrations", "alert-source integrations"),
+    ("models", "active LLM models"),
+    ("mcp", "connected MCP servers"),
+)
+
+_INTEGRATIONS_FIRST_ARGS: tuple[tuple[str, str], ...] = (
+    ("list", "list all configured integrations"),
+    ("verify", "run health checks on all integrations"),
+    ("show", "show details for a single integration"),
+)
+
+_MCP_FIRST_ARGS: tuple[tuple[str, str], ...] = (
+    ("list", "list connected MCP servers"),
+    ("connect", "add an MCP server via opensre integrations setup"),
+    ("disconnect", "remove an MCP server"),
+)
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand(
         "/list",
         "list integrations, MCP servers, and the active LLM connection "
         "('/list integrations', '/list models', '/list mcp')",
         _cmd_list,
+        first_arg_completions=_LIST_FIRST_ARGS,
+        execution_tier=ExecutionTier.SAFE,
     ),
     SlashCommand(
         "/integrations",
         "manage integrations ('/integrations list', '/integrations verify', "
         "'/integrations show <service>')",
         _cmd_integrations,
+        first_arg_completions=_INTEGRATIONS_FIRST_ARGS,
+        execution_tier=ExecutionTier.SAFE,
     ),
     SlashCommand(
         "/mcp",
         "manage MCP servers ('/mcp list', '/mcp connect', '/mcp disconnect')",
         _cmd_mcp,
+        first_arg_completions=_MCP_FIRST_ARGS,
+        execution_tier=ExecutionTier.SAFE,
     ),
 ]
 

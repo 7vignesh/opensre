@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from app.cli.interactive_shell.command_registry import repl_data
-from app.cli.interactive_shell.command_registry.types import SlashCommand
+from app.cli.interactive_shell.command_registry.types import ExecutionTier, SlashCommand
 from app.cli.interactive_shell.rendering import render_models_table
 from app.cli.interactive_shell.session import ReplSession
 from app.cli.interactive_shell.theme import TERMINAL_ERROR
@@ -225,6 +225,12 @@ def _cmd_model(session: ReplSession, console: Console, args: list[str]) -> bool:
     return True
 
 
+_MODEL_FIRST_ARGS: tuple[tuple[str, str], ...] = (
+    ("show", "show active provider and models"),
+    ("set", "switch provider  ·  /model set <provider> [model]"),
+    ("toolcall", "manage toolcall model for the active provider"),
+)
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand(
         "/model",
@@ -232,6 +238,8 @@ COMMANDS: list[SlashCommand] = [
         "'/model set <provider> [model] [--toolcall-model <m>]', "
         "'/model toolcall set <model>')",
         _cmd_model,
+        first_arg_completions=_MODEL_FIRST_ARGS,
+        execution_tier=ExecutionTier.SAFE,
     ),
 ]
 

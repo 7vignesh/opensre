@@ -122,47 +122,9 @@ class ShellCompleter(Completer):
     Completion levels:
       1. Bare-word aliases (``help``, ``exit``, …) — no leading slash, no spaces.
       2. Top-level slash command names (``/hel`` → ``/help``).
-      3. Subcommand keywords  (``/model `` → ``show / set / toolcall``).
+      3. First-arg keywords from each command's registry metadata (e.g. ``/model `` → hints).
       4. File-path completion for ``/investigate`` and ``/save``.
     """
-
-    _SUBCOMMANDS: dict[str, list[tuple[str, str]]] = {
-        "/model": [
-            ("show", "show active provider and models"),
-            ("set", "switch provider  ·  /model set <provider> [model]"),
-            ("toolcall", "manage toolcall model for the active provider"),
-        ],
-        "/integrations": [
-            ("list", "list all configured integrations"),
-            ("verify", "run health checks on all integrations"),
-            ("show", "show details for a single integration"),
-        ],
-        "/list": [
-            ("integrations", "alert-source integrations"),
-            ("models", "active LLM models"),
-            ("mcp", "connected MCP servers"),
-        ],
-        "/mcp": [
-            ("list", "list connected MCP servers"),
-            ("connect", "add an MCP server via opensre integrations setup"),
-            ("disconnect", "remove an MCP server"),
-        ],
-        "/template": [
-            ("generic", "generic alert JSON template"),
-            ("datadog", "Datadog monitor alert template"),
-            ("grafana", "Grafana alert template"),
-            ("honeycomb", "Honeycomb trigger template"),
-            ("coralogix", "Coralogix alert template"),
-        ],
-        "/trust": [
-            ("on", "enable trust mode (skip approval prompts)"),
-            ("off", "disable trust mode"),
-        ],
-        "/verbose": [
-            ("on", "enable verbose logging"),
-            ("off", "disable verbose logging"),
-        ],
-    }
 
     def get_completions(
         self,
@@ -220,8 +182,10 @@ class ShellCompleter(Completer):
                 )
                 return
 
+            entry = SLASH_COMMANDS.get(cmd_name)
+            hints = entry.first_arg_completions if entry is not None else ()
             sub_prefix = raw_arg.lower()
-            for sub, meta in self._SUBCOMMANDS.get(cmd_name, []):
+            for sub, meta in hints:
                 if sub.startswith(sub_prefix):
                     yield Completion(
                         sub,
@@ -315,10 +279,33 @@ def _build_prompt_style() -> Style:
     )
 
 
-def _run_new_alert(text: str, session: ReplSession, console: Console) -> None:
+def _run_new_alert(
+    text: str,
+    session: ReplSession,
+    console: Console,
+    *,
+    confirm_fn: Callable[[str], str] | None = None,
+    is_tty: bool | None = None,
+) -> None:
     """Dispatch a free-text alert description to the streaming pipeline."""
+    from app.cli.interactive_shell.execution_policy import (
+        evaluate_investigation_launch,
+        execution_allowed,
+    )
     from app.cli.interactive_shell.tasks import TaskKind
     from app.cli.investigation import run_investigation_for_session
+
+    policy = evaluate_investigation_launch(action_type="investigation")
+    if not execution_allowed(
+        policy,
+        session=session,
+        console=console,
+        action_summary="run RCA investigation from pasted alert text",
+        confirm_fn=confirm_fn,
+        is_tty=is_tty,
+    ):
+        session.record("alert", text, ok=False)
+        return
 
     task = session.task_registry.create(TaskKind.INVESTIGATION)
     task.mark_running()
@@ -375,7 +362,6 @@ async def _run_one_turn(
     if kind == "slash":
         # Rewrite bare-word commands to their slash form before dispatch.
         cmd_text = text if text.startswith("/") else f"/{text}"
-        session.record("slash", cmd_text)
         try:
             should_continue = dispatch_slash(cmd_text, session, console)
         except Exception as exc:  # noqa: BLE001
@@ -433,7 +419,6 @@ async def _repl_main(initial_input: str | None = None, config: ReplConfig | None
             kind = classify_input(stripped, session)
             if kind == "slash":
                 cmd_text = stripped if stripped.startswith("/") else f"/{stripped}"
-                session.record("slash", cmd_text)
                 if not dispatch_slash(cmd_text, session, console):
                     return 0
                 console.print()

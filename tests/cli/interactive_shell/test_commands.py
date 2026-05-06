@@ -85,6 +85,8 @@ class TestDispatchSlash:
         output = buf.getvalue()
         assert "interactions" in output
         assert "trust mode" in output
+        assert "grounding cli cache" in output
+        assert "grounding docs cache" in output
 
     def test_unknown_command_does_not_exit(self) -> None:
         session = ReplSession()
@@ -879,7 +881,8 @@ class TestCompactCommand:
         console, buf = _capture()
         dispatch_slash("/compact", session, console)
         assert "nothing to compact" in buf.getvalue()
-        assert len(session.history) == 5
+        assert len(session.history) == 6
+        assert session.history[-1]["text"] == "/compact"
 
     def test_trims_to_20_when_over_limit(self) -> None:
         session = ReplSession()

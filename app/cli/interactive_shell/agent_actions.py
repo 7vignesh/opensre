@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from rich.console import Console
 from rich.markup import escape
 
@@ -16,13 +18,30 @@ from app.cli.interactive_shell.action_planner import (
     plan_cli_actions,
     plan_terminal_tasks,
 )
-from app.cli.interactive_shell.command_registry import dispatch_slash, switch_llm_provider
+from app.cli.interactive_shell.command_registry import (
+    SLASH_COMMANDS,
+    dispatch_slash,
+    switch_llm_provider,
+)
+from app.cli.interactive_shell.execution_policy import (
+    evaluate_llm_runtime_switch,
+    evaluate_slash_tier,
+    execution_allowed,
+    resolve_slash_execution_tier,
+)
 from app.cli.interactive_shell.rendering import print_planned_actions
 from app.cli.interactive_shell.session import ReplSession
 from app.cli.interactive_shell.theme import TERMINAL_ACCENT_BOLD
 
 
-def execute_cli_actions(message: str, session: ReplSession, console: Console) -> bool:
+def execute_cli_actions(
+    message: str,
+    session: ReplSession,
+    console: Console,
+    *,
+    confirm_fn: Callable[[str], str] | None = None,
+    is_tty: bool | None = None,
+) -> bool:
     """Execute inferred CLI and shell actions.
 
     Returns True when the message was handled. Unknown or ambiguous requests fall
@@ -35,30 +54,104 @@ def execute_cli_actions(message: str, session: ReplSession, console: Console) ->
     console.print()
     console.print(f"[{TERMINAL_ACCENT_BOLD}]assistant:[/]")
     print_planned_actions(console, actions)
-    console.print()
-    console.print("[dim]Running requested actions:[/dim]")
     if not has_unhandled_clause:
         session.record("cli_agent", message)
 
     for action in actions:
         console.print()
         if action.kind == "slash":
-            session.record("slash", action.content)
+            stripped = action.content.strip()
+            parts = stripped.split()
+            if stripped == "/" or not parts:
+                if not dispatch_slash(
+                    action.content,
+                    session,
+                    console,
+                    confirm_fn=confirm_fn,
+                    is_tty=is_tty,
+                ):
+                    return True
+                continue
+            name = parts[0].lower()
+            args = parts[1:]
+            cmd = SLASH_COMMANDS.get(name)
+            if cmd is None:
+                if not dispatch_slash(
+                    action.content,
+                    session,
+                    console,
+                    confirm_fn=confirm_fn,
+                    is_tty=is_tty,
+                ):
+                    return True
+                continue
+            tier = resolve_slash_execution_tier(name, args, cmd.execution_tier)
+            policy = evaluate_slash_tier(tier)
+            if not execution_allowed(
+                policy,
+                session=session,
+                console=console,
+                action_summary=stripped,
+                confirm_fn=confirm_fn,
+                is_tty=is_tty,
+                action_already_listed=True,
+            ):
+                session.record("slash", stripped, ok=False)
+                continue
             console.print(f"[bold]$ {escape(action.content)}[/bold]")
-            if not dispatch_slash(action.content, session, console):
+            if not dispatch_slash(
+                action.content,
+                session,
+                console,
+                confirm_fn=confirm_fn,
+                is_tty=is_tty,
+                policy_precleared=True,
+            ):
                 return True
         elif action.kind == "llm_provider":
+            pol = evaluate_llm_runtime_switch(action_type="switch_llm_provider")
+            if not execution_allowed(
+                pol,
+                session=session,
+                console=console,
+                action_summary=f"/model set {action.content}",
+                confirm_fn=confirm_fn,
+                is_tty=is_tty,
+                action_already_listed=True,
+            ):
+                continue
             console.print(f"[bold]$ /model set {escape(action.content)}[/bold]")
             switch_llm_provider(action.content, console)
             session.record("slash", f"/model set {action.content}")
         elif action.kind == "shell":
-            run_shell_command(action.content, session, console)
+            run_shell_command(
+                action.content,
+                session,
+                console,
+                confirm_fn=confirm_fn,
+                is_tty=is_tty,
+                action_already_listed=True,
+            )
         elif action.kind == "cli_command":
             run_opensre_cli_command(action.content, session, console)
         elif action.kind == "sample_alert":
-            run_sample_alert(action.content, session, console)
+            run_sample_alert(
+                action.content,
+                session,
+                console,
+                confirm_fn=confirm_fn,
+                is_tty=is_tty,
+                action_already_listed=True,
+            )
         else:
-            run_synthetic_test(action.content, session, console)
+            run_synthetic_test(
+                action.content,
+                session,
+                console,
+                confirm_fn=confirm_fn,
+                is_tty=is_tty,
+                action_already_listed=True,
+            )
 
     console.print()
     return not has_unhandled_clause

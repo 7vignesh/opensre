@@ -8,7 +8,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.markup import escape
 
-from app.cli.interactive_shell.command_registry.types import SlashCommand
+from app.cli.interactive_shell.command_registry.types import ExecutionTier, SlashCommand
 from app.cli.interactive_shell.session import ReplSession
 from app.cli.interactive_shell.tasks import TaskKind
 from app.cli.interactive_shell.theme import TERMINAL_ACCENT_BOLD, TERMINAL_ERROR
@@ -144,20 +144,41 @@ def _cmd_save(session: ReplSession, console: Console, args: list[str]) -> bool:
     return True
 
 
+_TEMPLATE_FIRST_ARGS: tuple[tuple[str, str], ...] = (
+    ("generic", "generic alert JSON template"),
+    ("datadog", "Datadog monitor alert template"),
+    ("grafana", "Grafana alert template"),
+    ("honeycomb", "Honeycomb trigger template"),
+    ("coralogix", "Coralogix alert template"),
+)
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand(
         "/template",
         "print a starter alert JSON template "
         "('/template generic|datadog|grafana|honeycomb|coralogix')",
         _cmd_template,
+        first_arg_completions=_TEMPLATE_FIRST_ARGS,
+        execution_tier=ExecutionTier.SAFE,
     ),
     SlashCommand(
         "/investigate",
         "run an RCA investigation from a file ('/investigate <file>')",
         _cmd_investigate_file,
+        execution_tier=ExecutionTier.ELEVATED,
     ),
-    SlashCommand("/last", "reprint the most recent investigation report", _cmd_last),
-    SlashCommand("/save", "save last investigation to a file ('/save <path>')", _cmd_save),
+    SlashCommand(
+        "/last",
+        "reprint the most recent investigation report",
+        _cmd_last,
+        execution_tier=ExecutionTier.SAFE,
+    ),
+    SlashCommand(
+        "/save",
+        "save last investigation to a file ('/save <path>')",
+        _cmd_save,
+        execution_tier=ExecutionTier.ELEVATED,
+    ),
 ]
 
 __all__ = ["COMMANDS"]
