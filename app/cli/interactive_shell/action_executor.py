@@ -263,6 +263,94 @@ def run_pwd_command(command: str, session: ReplSession, console: Console) -> Non
     session.record("shell", command)
 
 
+_OPENSRE_BLOCKED_SUBCOMMANDS: frozenset[str] = frozenset({"agent"})
+
+
+def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -> bool:
+    """Run an opensre subcommand (not agent).
+
+    Returns True if the command was attempted (regardless of success),
+    False if the subcommand is blocked or args are empty.
+    """
+    try:
+        tokens = shlex.split(args)
+    except ValueError:
+        tokens = args.split()
+    if not tokens:
+        return False
+
+    first_token = tokens[0].lower()
+    if first_token in _OPENSRE_BLOCKED_SUBCOMMANDS:
+        console.print(f"[red]Cannot run `opensre {first_token}`: subcommand is blocked.[/red]")
+        return False
+
+    argv_list = [sys.executable, "-m", "app.cli"] + tokens
+    display_command = f"opensre {' '.join(tokens)}"
+    console.print(f"[bold]$ {display_command}[/bold]")
+
+    session.record("cli_command", display_command)
+
+    task = session.task_registry.create(TaskKind.CLI_COMMAND)
+    task.mark_running()
+    try:
+        proc = subprocess.Popen(
+            argv_list,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        task.mark_failed(str(exc))
+        console.print(f"[red]failed to start:[/red] {escape(str(exc))}")
+        return True
+
+    task.attach_process(proc)
+    started_at = time.monotonic()
+
+    def _watch() -> None:
+        terminated_by_watcher = False
+        timed_out = False
+        while proc.poll() is None:
+            if time.monotonic() - started_at > SHELL_COMMAND_TIMEOUT_SECONDS:
+                timed_out = True
+                task.request_cancel()
+                terminate_child_process(proc)
+                terminated_by_watcher = True
+                break
+            if task.cancel_requested.is_set():
+                terminate_child_process(proc)
+                terminated_by_watcher = True
+                break
+            time.sleep(_SYNTHETIC_POLL_SECONDS)
+
+        try:
+            if timed_out:
+                task.mark_failed(f"timed out after {SHELL_COMMAND_TIMEOUT_SECONDS}s")
+                return
+            if terminated_by_watcher and task.cancel_requested.is_set():
+                task.mark_cancelled()
+                return
+
+            stdout, stderr = proc.communicate()
+            if proc.returncode == 0:
+                task.mark_completed()
+                if stdout:
+                    print_command_output(console, stdout)
+            else:
+                task.mark_failed(f"exit code {proc.returncode}")
+                console.print(f"[red]command failed (exit {proc.returncode}):[/red]")
+                if stderr:
+                    console.print(f"[dim]{escape(stderr)}[/dim]")
+        except Exception as exc:  # noqa: BLE001
+            task.mark_failed(str(exc))
+            console.print(f"[red]error:[/red] {escape(str(exc))}")
+
+    thread = threading.Thread(target=_watch, daemon=True)
+    thread.start()
+    console.print("[dim]started.[/dim]")
+    return True
+
+
 def run_sample_alert(
     template_name: str,
     session: ReplSession,
