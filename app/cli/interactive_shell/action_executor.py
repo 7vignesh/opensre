@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, FrozenSet
+from typing import Any
 
 from rich.console import Console
 from rich.markup import escape
@@ -244,7 +244,7 @@ def run_pwd_command(command: str, session: ReplSession, console: Console) -> Non
     session.record("shell", command)
 
 
-_OPENSRE_BLOCKED_SUBCOMMANDS: FrozenSet[str] = frozenset({"agent"})
+_OPENSRE_BLOCKED_SUBCOMMANDS: frozenset[str] = frozenset({"agent"})
 
 
 def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -> bool:
