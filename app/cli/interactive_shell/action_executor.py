@@ -286,9 +286,32 @@ def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -
         return True
 
     task.attach_process(proc)
+    started_at = time.monotonic()
 
     def _watch() -> None:
+        terminated_by_watcher = False
+        timed_out = False
+        while proc.poll() is None:
+            if time.monotonic() - started_at > SHELL_COMMAND_TIMEOUT_SECONDS:
+                timed_out = True
+                task.request_cancel()
+                terminate_child_process(proc)
+                terminated_by_watcher = True
+                break
+            if task.cancel_requested.is_set():
+                terminate_child_process(proc)
+                terminated_by_watcher = True
+                break
+            time.sleep(_SYNTHETIC_POLL_SECONDS)
+
         try:
+            if timed_out:
+                task.mark_failed(f"timed out after {SHELL_COMMAND_TIMEOUT_SECONDS}s")
+                return
+            if terminated_by_watcher and task.cancel_requested.is_set():
+                task.mark_cancelled()
+                return
+
             stdout, stderr = proc.communicate()
             if proc.returncode == 0:
                 task.mark_completed()
