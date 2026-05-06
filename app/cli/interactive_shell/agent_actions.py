@@ -475,6 +475,92 @@ def _print_planned_actions(console: Console, actions: list[PlannedAction]) -> No
         )
 
 
+def _terminate_child_process(proc: subprocess.Popen[Any]) -> None:
+    """Best-effort SIGTERM → wait → SIGKILL → wait without blocking forever."""
+    if proc.poll() is not None:
+        return
+    with contextlib.suppress(OSError):
+        proc.terminate()
+    try:
+        proc.wait(timeout=_SIGTERM_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            proc.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
+
+
+def _read_diag(buf: tempfile.SpooledTemporaryFile[bytes]) -> str:
+    """Read up to ``_SYNTHETIC_DIAG_CHARS`` bytes from a captured stderr buffer."""
+    buf.seek(0)
+    return buf.read(_SYNTHETIC_DIAG_CHARS).decode("utf-8", errors="replace").strip()
+
+
+def _watch_synthetic_subprocess(
+    task: TaskRecord,
+    proc: subprocess.Popen[Any],
+    session: ReplSession,
+    suite_name: str,
+    stderr_buf: tempfile.SpooledTemporaryFile[bytes],
+) -> None:
+    def _history_text() -> str:
+        return f"{suite_name} task:{task.task_id}"
+
+    history_gen_when_watch_started = session.history_generation
+
+    def _record_synthetic_if_current_session(ok: bool) -> None:
+        if session.history_generation != history_gen_when_watch_started:
+            return
+        session.record("synthetic_test", _history_text(), ok=ok)
+
+    def _run() -> None:
+        started = time.monotonic()
+        timed_out = False
+        terminated_by_watcher = False
+        while proc.poll() is None:
+            if time.monotonic() - started > _SYNTHETIC_TEST_TIMEOUT_SECONDS:
+                timed_out = True
+                task.request_cancel()
+                _terminate_child_process(proc)
+                terminated_by_watcher = True
+                break
+            if task.cancel_requested.is_set():
+                _terminate_child_process(proc)
+                terminated_by_watcher = True
+                break
+            time.sleep(_SYNTHETIC_POLL_SECONDS)
+
+        try:
+            if timed_out:
+                task.mark_failed(f"timed out after {_SYNTHETIC_TEST_TIMEOUT_SECONDS}s")
+                _record_synthetic_if_current_session(ok=False)
+                return
+
+            code = proc.returncode
+            if code is None:
+                task.mark_failed("subprocess did not report exit code")
+                _record_synthetic_if_current_session(ok=False)
+                return
+
+            if terminated_by_watcher and task.cancel_requested.is_set():
+                task.mark_cancelled()
+                _record_synthetic_if_current_session(ok=False)
+                return
+
+            if code == 0:
+                task.mark_completed(result="ok")
+                _record_synthetic_if_current_session(ok=True)
+            else:
+                diag = _read_diag(stderr_buf)
+                error_msg = f"exit code {code}" + (f": {diag}" if diag else "")
+                task.mark_failed(error_msg)
+                _record_synthetic_if_current_session(ok=False)
+        finally:
+            stderr_buf.close()
+
+    threading.Thread(target=_run, daemon=True, name=f"synthetic-{task.task_id}").start()
+
+
 def _run_shell_command(
     command: str,
     session: ReplSession,
