@@ -704,14 +704,16 @@ def test_execute_cli_actions_blocks_ambiguous_shell_operators() -> None:
 
 
 def test_compound_prompt_plans_chat_list_and_blocked_deploy(monkeypatch: pytest.fixture) -> None:
-    # NOTE: This test was renamed and updated to test_cli_command. 
+    # NOTE: This test was renamed and updated to test_cli_command.
     # Keeping this stub for backwards compatibility.
     # Original issue: pre-existing failure on main for path_with_spaces
     pass
 
 
 def test_execute_cli_actions_handles_path_with_spaces(monkeypatch: object) -> None:
-    pytest.skip("SKIPPED: This test fails on main due to a pre-existing issue with spaces in paths.")
+    pytest.skip(
+        "SKIPPED: This test fails on main due to a pre-existing issue with spaces in paths."
+    )
 
 
 def test_execute_cli_actions_rejects_malformed_shell_input() -> None:
