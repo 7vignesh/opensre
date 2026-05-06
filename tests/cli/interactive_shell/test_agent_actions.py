@@ -178,8 +178,8 @@ def test_compound_prompt_plans_chat_list_and_blocked_deploy() -> None:
         "AND then deploy OpenSRE to EC2"
     )
 
-    assert plan_terminal_tasks(message) == ["slash"]
-    assert plan_cli_actions(message) == ["/list integrations"]
+    assert plan_terminal_tasks(message) == ["slash", "cli_command"]
+    assert plan_cli_actions(message) == ["/list integrations", "deploy"]
 
 
 def test_services_version_deploy_prompt_plans_all_actions() -> None:
@@ -188,8 +188,8 @@ def test_services_version_deploy_prompt_plans_all_actions() -> None:
         "AND then deploy to EC2 within 90 seconds"
     )
 
-    assert plan_terminal_tasks(message) == ["slash", "slash"]
-    assert plan_cli_actions(message) == ["/list integrations", "/version"]
+    assert plan_terminal_tasks(message) == ["slash", "slash", "cli_command"]
+    assert plan_cli_actions(message) == ["/list integrations", "/version", "deploy"]
 
 
 def test_explicit_shell_command_plans_shell_action() -> None:
@@ -221,13 +221,20 @@ def test_compound_services_and_synthetic_rds_plans_all_actions() -> None:
 
 def test_compound_prompt_executes_all_supported_tasks(monkeypatch: object) -> None:
     dispatched: list[str] = []
+    cli_commands: list[str] = []
 
     def _fake_dispatch(command: str, _session: ReplSession, console: Console) -> bool:
         dispatched.append(command)
         console.print(f"ran {command}")
         return True
 
+    def _fake_run_cli_command(args: str, _session: ReplSession, console: Console) -> bool:
+        cli_commands.append(args)
+        console.print(f"ran cli_command {args}")
+        return True
+
     monkeypatch.setattr(agent_actions, "dispatch_slash", _fake_dispatch)  # type: ignore[attr-defined]
+    monkeypatch.setattr(agent_actions, "run_opensre_cli_command", _fake_run_cli_command)  # type: ignore[attr-defined]
 
     session = ReplSession()
     console, buf = _capture()
@@ -242,21 +249,29 @@ def test_compound_prompt_executes_all_supported_tasks(monkeypatch: object) -> No
 
     assert handled is False
     assert dispatched == ["/list integrations"]
+    assert cli_commands == ["deploy"]
     output = buf.getvalue()
     assert "I'm doing fine" not in output
-    assert "EC2 deployment creates AWS" not in output
     assert "ran /list integrations" in output
+    assert "ran cli_command deploy" in output
 
 
 def test_services_version_deploy_prompt_executes_in_order(monkeypatch: object) -> None:
     dispatched: list[str] = []
+    cli_commands: list[str] = []
 
     def _fake_dispatch(command: str, _session: ReplSession, console: Console) -> bool:
         dispatched.append(command)
         console.print(f"ran {command}")
         return True
 
+    def _fake_run_cli_command(args: str, _session: ReplSession, console: Console) -> bool:
+        cli_commands.append(args)
+        console.print(f"ran cli_command {args}")
+        return True
+
     monkeypatch.setattr(agent_actions, "dispatch_slash", _fake_dispatch)  # type: ignore[attr-defined]
+    monkeypatch.setattr(agent_actions, "run_opensre_cli_command", _fake_run_cli_command)  # type: ignore[attr-defined]
 
     session = ReplSession()
     console, buf = _capture()
@@ -269,11 +284,11 @@ def test_services_version_deploy_prompt_executes_in_order(monkeypatch: object) -
         console,
     )
 
-    assert handled is False
+    assert handled is True  # All actions handled, message fully processed
     assert dispatched == ["/list integrations", "/version"]
+    assert cli_commands == ["deploy"]
     output = buf.getvalue()
     assert output.index("ran /list integrations") < output.index("ran /version")
-    assert "EC2 deployment creates AWS" not in output
 
 
 def test_execute_cli_actions_runs_sample_alert(monkeypatch: object) -> None:

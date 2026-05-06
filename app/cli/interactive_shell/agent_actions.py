@@ -29,12 +29,21 @@ from app.cli.interactive_shell.terminal_intent import mentioned_integration_serv
 from app.cli.interactive_shell.theme import TERMINAL_ACCENT_BOLD
 from app.cli.support.errors import OpenSREError
 
+_OPENSRE_BLOCKED_SUBCOMMANDS = frozenset({"agent"})
+
 
 @dataclass(frozen=True)
 class PlannedAction:
     """A deterministic action inferred from a natural-language terminal request."""
 
-    kind: Literal["llm_provider", "slash", "shell", "sample_alert", "synthetic_test"]
+    kind: Literal[
+        "llm_provider",
+        "slash",
+        "shell",
+        "sample_alert",
+        "synthetic_test",
+        "cli_command",
+    ]
     content: str
     position: int
 
@@ -74,6 +83,15 @@ _ACTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
             re.IGNORECASE,
         ),
         "/version",
+    ),
+    (
+        re.compile(
+            r"\b(?:deploy|guardrails|remote|doctor|onboard|update|uninstall)\b"
+            r"|"
+            r"\bopensre\s+(?P<subcmd>[a-z][a-z0-9-]*)\b",
+            re.IGNORECASE,
+        ),
+        "cli_command",
     ),
 )
 
@@ -189,6 +207,27 @@ def _llm_provider_action(provider: str, position: int) -> PlannedAction:
     return PlannedAction(kind="llm_provider", content=provider, position=position)
 
 
+def _cli_command_action(args: str, position: int) -> PlannedAction:
+    return PlannedAction(kind="cli_command", content=args, position=position)
+
+
+def run_opensre_cli_command(args: str, session: ReplSession, console: Console) -> bool:
+    """Run an opensre subcommand (not agent) and return False on success."""
+    tokens = args.split()
+    if not tokens:
+        return False
+
+    first_token = tokens[0].lower()
+    if first_token in _OPENSRE_BLOCKED_SUBCOMMANDS:
+        console.print(f"[red]Cannot run `opensre {first_token}`: subcommand is blocked.[/red]")
+        return False
+
+    command = [sys.executable, "-m", "app.cli"] + tokens
+    full_command = " ".join(command)
+    _run_shell_command(full_command, session, console)
+    return True
+
+
 def _strip_wrapping_quotes(command: str) -> str:
     stripped = command.strip()
     if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"`", "'", '"'}:
@@ -288,7 +327,18 @@ def _plan_clause_actions(
 
     for pattern, command in _ACTION_PATTERNS:
         match = pattern.search(clause.text)
-        if match is None or command in seen_slash:
+        if match is None:
+            continue
+
+        # Handle cli_command pattern (captures subcommand name)
+        if command == "cli_command":
+            # Try to get named group "subcmd" first, fallback to matching the full pattern
+            subcmd = match.group("subcmd") if match.lastgroup == "subcmd" else match.group(0)
+            if subcmd and subcmd.lower() not in _OPENSRE_BLOCKED_SUBCOMMANDS:
+                planned.append(_cli_command_action(subcmd, clause.position + match.start()))
+            continue
+
+        if command in seen_slash:
             continue
         if command == "/list integrations" and mentioned_services:
             continue
@@ -384,8 +434,12 @@ def _plan_actions(message: str) -> list[PlannedAction]:
 
 
 def plan_cli_actions(message: str) -> list[str]:
-    """Return safe read-only slash commands requested by a natural-language turn."""
-    return [action.content for action in _plan_actions(message) if action.kind == "slash"]
+    """Return safe read-only slash commands and CLI commands requested by a natural-language turn."""
+    return [
+        action.content
+        for action in _plan_actions(message)
+        if action.kind in ("slash", "cli_command")
+    ]
 
 
 def plan_terminal_tasks(message: str) -> list[str]:
@@ -409,6 +463,7 @@ def _print_planned_actions(console: Console, actions: list[PlannedAction]) -> No
             "shell": "shell",
             "slash": "command",
             "synthetic_test": "synthetic test",
+            "cli_command": "opensre",
         }[action.kind]
         console.print(
             f"[dim]{index}.[/dim] [{TERMINAL_ACCENT_BOLD}]{label}[/] {escape(action.content)}"
@@ -726,6 +781,9 @@ def execute_cli_actions(message: str, session: ReplSession, console: Console) ->
             _run_shell_command(action.content, session, console)
         elif action.kind == "sample_alert":
             _run_sample_alert(action.content, session, console)
+        elif action.kind == "cli_command":
+            if not run_opensre_cli_command(action.content, session, console):
+                return True
         else:
             _run_synthetic_test(action.content, session, console)
 

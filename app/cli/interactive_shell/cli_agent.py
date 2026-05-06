@@ -43,9 +43,9 @@ _ACTION_RULE = (
     "ollama, codex, claude-code, gemini-cli; both `model` (reasoning) and `toolcall_model` are optional; "
     '`{"action":"switch_toolcall_model","model":"claude-opus-4-7"}` '
     "to change ONLY the toolcall model on the currently active provider; "
-    '`{"action":"slash","command":"/model show"}` where command is one of '
-    "/model show, /list models, /health, /doctor, /version. For ordinary "
-    "questions, return normal Markdown."
+    '`{"action":"run_cli_command","args":"<subcommand> <flags>"}` '
+    "to run any opensre subcommand (see CLI reference below for all subcommands; "
+    "agent is blocked). For ordinary questions, return normal Markdown."
 )
 
 _ALLOWED_SLASH_ACTIONS = frozenset(
@@ -269,6 +269,17 @@ def _execute_action_plan(
             session.record("slash", command)
             console.print(f"[bold]$ {escape(command)}[/bold]")
             dispatch_slash(command, session, console)
+            continue
+
+        if kind == "run_cli_command":
+            args = str(action.get("args", "")).strip()
+            if not args:
+                console.print("[red]missing args for run_cli_command action[/red]")
+                continue
+            console.print(f"[bold]$ opensre {escape(args)}[/bold]")
+            from app.cli.interactive_shell.agent_actions import run_opensre_cli_command
+
+            run_opensre_cli_command(args, session, console)
             continue
 
         console.print(f"[red]unsupported action:[/red] {escape(kind or '?')}")
