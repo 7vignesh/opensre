@@ -748,11 +748,16 @@ def test_execute_cli_actions_blocks_ambiguous_shell_operators() -> None:
     assert "shell operators" in output
 
 
-def test_compound_prompt_plans_chat_list_and_blocked_deploy(monkeypatch: None) -> None:
-    # NOTE: This test was renamed and updated to test_cli_command.
-    # Keeping this stub for backwards compatibility.
-    # Original issue: pre-existing failure on main for path_with_spaces
-    pass
+def test_compound_prompt_plans_chat_list_and_blocked_deploy() -> None:
+    message = "show versions AND show services AND opensre agent"
+    planned = plan_cli_actions(message)
+    assert "agent" in planned
+    session = ReplSession()
+    console, buf = _capture()
+    result = execute_cli_actions("opensre agent", session, console)
+    assert result is True
+    output = buf.getvalue()
+    assert "blocked" in output.lower()
 
 
 def test_execute_cli_actions_handles_path_with_spaces() -> None:
