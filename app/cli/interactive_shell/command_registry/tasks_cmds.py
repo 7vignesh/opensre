@@ -144,6 +144,11 @@ COMMANDS: list[SlashCommand] = [
         "cancel a running task by id ('/cancel <task_id>' — see /tasks)",
         _cmd_cancel,
     ),
+    SlashCommand(
+        "/stop",
+        "hints for stopping in-flight investigations and background tasks",
+        _cmd_stop,
+    ),
 ]
 
 __all__ = ["COMMANDS"]
