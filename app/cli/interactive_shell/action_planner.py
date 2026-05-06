@@ -11,6 +11,7 @@ from app.cli.interactive_shell.intent_parser import (
     INTEGRATION_DETAIL_RE,
     SAMPLE_ALERT_RE,
     SYNTHETIC_RDS_TEST_RE,
+    cli_command_action,
     extract_llm_provider_switch,
     extract_shell_command,
     sample_alert_action,
@@ -33,6 +34,10 @@ def plan_clause_actions(
     for pattern, command in ACTION_PATTERNS:
         match = pattern.search(clause.text)
         if match is None or command in seen_slash:
+            continue
+        if command == "cli_command":
+            subcmd = match.group("subcmd") if match.lastgroup == "subcmd" else match.group(0)
+            planned.append(cli_command_action(subcmd, clause.position + match.start()))
             continue
         if command == "/list integrations" and mentioned_services:
             continue
