@@ -1361,6 +1361,13 @@ Thanks goes to these amazing people:
             <sub><b>Dhaxor</b></sub>
         </a>
     </td>
+            <td align="center" width="8%">
+        <a href="https://github.com/vivek41-glitch">
+            <img src="https://avatars.githubusercontent.com/u/222612958?v=4" width="45" alt="vivek41-glitch"/>
+            <br />
+            <sub><b>vivek41-glitch</b></sub>
+        </a>
+    </td>
 		</tr>
 	</tbody>
 </table>
