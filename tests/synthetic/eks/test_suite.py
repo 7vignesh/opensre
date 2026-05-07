@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.llm_credentials import has_llm_api_key
 from app.nodes.plan_actions.node import InvestigationPlan
 from tests.synthetic.eks.run_suite import run_scenario, score_result
 from tests.synthetic.eks.scenario_loader import (
@@ -17,6 +18,49 @@ from tests.synthetic.eks.scenario_loader import (
 from tests.synthetic.k8s_schemas import VALID_K8S_EVIDENCE_SOURCES
 from tests.synthetic.mock_datadog_backend.backend import FixtureDatadogBackend
 from tests.synthetic.mock_eks_backend.backend import FixtureEKSBackend
+
+# Providers that authenticate via local/IAM mechanisms and don't need an API key env var.
+# Must match the no-key providers in LLMSettings._require_api_key_for_selected_provider().
+_NO_KEY_PROVIDERS = frozenset(
+    {"ollama", "bedrock", "codex", "cursor", "claude-code", "gemini-cli", "opencode", "kimi"}
+)
+
+# Maps cloud-based providers to the env var they require.
+# Must match the provider_to_key mapping in LLMSettings._require_api_key_for_selected_provider().
+_PROVIDER_KEY_ENV_VAR: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "requesty": "REQUESTY_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+}
+
+
+def _llm_credentials_available() -> bool:
+    """Return True when the active LLM provider's credentials are configured.
+
+    Only returns False (triggering a skip) when the provider is recognized and
+    its required API key is genuinely absent.  Invalid provider names or other
+    config errors are *not* caught here so they still surface as hard failures.
+    """
+    import os
+
+    provider = (os.getenv("LLM_PROVIDER") or "anthropic").strip().lower() or "anthropic"
+
+    if provider in _NO_KEY_PROVIDERS:
+        return True
+
+    env_var = _PROVIDER_KEY_ENV_VAR.get(provider)
+    if env_var is None:
+        # Unknown provider — let the test run and fail loudly with a real error.
+        return True
+
+    return has_llm_api_key(env_var)
+
+
+_SKIP_REASON = "SKIPPED: Requires LLM provider credentials"
 
 # ---------------------------------------------------------------------------
 # Loader and fixture validation
@@ -269,6 +313,7 @@ class TestHarnessEndToEnd:
         # environment.  A dummy value is enough here because every LLM call in
         # the pipeline is either mocked (plan_actions) or bypassed entirely by
         # the healthy short-circuit (diagnose_root_cause).
+        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
         monkeypatch.setenv("HEALTHY_SHORT_CIRCUIT", "true")
 
@@ -343,6 +388,9 @@ def _should_assert_trajectory(fixture, actual_category: str) -> bool:
 
 def _run_scenario_test(fixture) -> None:
     """Run scenario with real LLM and mock backends, then assert scoring."""
+    if not _llm_credentials_available():
+        pytest.skip(_SKIP_REASON)
+
     failures: list[str] = []
     for attempt in range(1, _LLM_ATTEMPTS + 1):
         final_state, score = run_scenario(fixture, use_mock_backends=True)
