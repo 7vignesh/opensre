@@ -342,12 +342,7 @@ def _is_only_missing_llm_api_key_validation(exc: ValidationError) -> bool:
     if err.get("loc") != ():
         return False
     msg = str(err.get("msg", ""))
-    return (
-        "LLM provider" in msg
-        and "requires" in msg
-        and "API_KEY" in msg
-        and "to be set" in msg
-    )
+    return "LLM provider" in msg and "requires" in msg and "API_KEY" in msg and "to be set" in msg
 
 
 def has_credentials_for_active_llm_provider() -> bool:
