@@ -378,7 +378,9 @@ def render_ready_box(
     height = max(left.plain.count("\n"), right.plain.count("\n")) + 1
     divider = _vertical_divider(height)
 
-    grid = Table.grid(padding=(0, 2), expand=False)
+    # Construct a Table instance directly to avoid mypy confusion with
+    # `Table.grid()` return type (it is typed as returning a Group).
+    grid: Table = Table(padding=(0, 2), expand=False, show_header=False)
     grid.add_column(justify="left", vertical="top", width=_LEFT_COL_WIDTH)
     grid.add_column(justify="center", vertical="top", width=1)
     grid.add_column(
