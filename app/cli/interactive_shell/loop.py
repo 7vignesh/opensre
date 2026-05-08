@@ -212,7 +212,7 @@ async def _repl_main(initial_input: str | None = None, _config: ReplConfig | Non
     console = Console(highlight=False, force_terminal=True, color_system="truecolor")
     render_banner(console)
     session = ReplSession()
-    prompt = _build_prompt_session()
+    prompt = _build_prompt_session(session)
     session.prompt_history_backend = prompt.history
 
     # Allow a single pre-seeded input for test harnesses

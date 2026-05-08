@@ -300,7 +300,10 @@ def _build_prompt_style() -> Style:
     )
 
 
-def _build_prompt_session() -> PromptSession[str]:
+def _build_prompt_session(session: ReplSession | None = None) -> PromptSession[str]:
+    # Keep a backward-compatible parameter to avoid runtime signature mismatches
+    # across mixed versions of interactive shell modules.
+    _ = session
     return _install_prompt_frame(
         PromptSession(
             completer=ShellCompleter(),
