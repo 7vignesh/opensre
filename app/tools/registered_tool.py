@@ -145,6 +145,8 @@ class RegisteredTool:
     )
     tags: tuple[str, ...] = ()
     cost_tier: CostTier | None = None
+    requires_approval: bool = False
+    approval_reason: str = ""
     origin_module: str = ""
     origin_name: str = ""
 
@@ -241,6 +243,8 @@ class RegisteredTool:
             extract_params=tool.extract_params,
             tags=resolved_tags,
             cost_tier=resolved_cost_tier,
+            requires_approval=getattr(tool.__class__, "requires_approval", False),
+            approval_reason=getattr(tool.__class__, "approval_reason", ""),
             origin_module=tool.__class__.__module__,
             origin_name=tool.__class__.__name__,
         )

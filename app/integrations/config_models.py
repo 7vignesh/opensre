@@ -671,6 +671,10 @@ class DiscordBotConfig(StrictConfigModel):
     application_id: str = ""
     public_key: str = ""
     default_channel_id: str | None = None
+    identity_policy: dict[str, object] | None = Field(
+        default=None,
+        description="Messaging identity policy for inbound security (MessagingIdentityPolicy shape)",
+    )
 
     @field_validator("bot_token", mode="before")
     @classmethod
@@ -694,6 +698,30 @@ class TelegramBotConfig(StrictConfigModel):
 
     bot_token: str
     default_chat_id: str | None = None
+    identity_policy: dict[str, object] | None = Field(
+        default=None,
+        description="Messaging identity policy for inbound security (MessagingIdentityPolicy shape)",
+    )
+
+    @field_validator("bot_token", mode="before")
+    @classmethod
+    def _validate_bot_token(cls, value: object) -> str:
+        stripped = str(value or "").strip()
+        if not stripped:
+            raise ValueError("bot_token cannot be empty or just whitespace")
+        return stripped
+
+
+class SlackBotConfig(StrictConfigModel):
+    """Slack Bot (Events API) runtime config for inbound messaging."""
+
+    bot_token: str
+    signing_secret: str = ""
+    app_id: str = ""
+    identity_policy: dict[str, object] | None = Field(
+        default=None,
+        description="Messaging identity policy for inbound security (MessagingIdentityPolicy shape)",
+    )
 
     @field_validator("bot_token", mode="before")
     @classmethod
