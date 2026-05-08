@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.llm_credentials import has_credentials_for_active_llm_provider
+from app.config import has_credentials_for_active_llm_provider
 from app.nodes.plan_actions.node import InvestigationPlan
 from tests.synthetic.eks.run_suite import run_scenario, score_result
 from tests.synthetic.eks.scenario_loader import (

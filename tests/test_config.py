@@ -3,8 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.config import LLMSettings
-from app.llm_credentials import has_credentials_for_active_llm_provider
+from app.config import LLMSettings, has_credentials_for_active_llm_provider
 
 
 def test_llm_settings_reject_provider_typos_with_suggestion() -> None:

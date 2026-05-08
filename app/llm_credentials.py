@@ -9,7 +9,6 @@ from typing import Final
 
 import keyring  # type: ignore[import-not-found,import-untyped]
 import keyring.errors  # type: ignore[import-not-found,import-untyped]
-from pydantic import ValidationError
 
 _KEYRING_SERVICE: Final = "opensre.llm"
 _DISABLED_VALUES: Final = frozenset({"1", "true", "yes", "on"})
@@ -35,39 +34,6 @@ def resolve_llm_api_key(env_var: str) -> str:
 def has_llm_api_key(env_var: str) -> bool:
     """Return True when an API key is available from env or secure local storage."""
     return bool(resolve_llm_api_key(env_var))
-
-
-def _is_only_missing_llm_api_key_validation(exc: ValidationError) -> bool:
-    """True when the only failure is LLMSettings' missing-key model validator."""
-    errors = exc.errors()
-    if len(errors) != 1:
-        return False
-    err = errors[0]
-    if err.get("type") != "value_error":
-        return False
-    if err.get("loc") != ():
-        return False
-    msg = str(err.get("msg", ""))
-    return "LLM provider" in msg and "requires" in msg and "API_KEY" in msg and "to be set" in msg
-
-
-def has_credentials_for_active_llm_provider() -> bool:
-    """Return True when :meth:`app.config.LLMSettings.from_env` succeeds.
-
-    Runs full LLM env validation (provider, model names, ``LLM_MAX_TOKENS``, keys via
-    :func:`resolve_llm_api_key`, etc.). Callers such as synthetic tests skip only when
-    validation fails *solely* because the active provider's API key is absent; any other
-    misconfiguration is re-raised so the run fails loudly.
-    """
-    from app.config import LLMSettings
-
-    try:
-        LLMSettings.from_env()
-        return True
-    except ValidationError as exc:
-        if _is_only_missing_llm_api_key_validation(exc):
-            return False
-        raise
 
 
 def _keyring_backend_name() -> str:
