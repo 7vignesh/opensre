@@ -7,7 +7,7 @@ These are public endpoints and issuer URLs, not secrets.
 import os
 from difflib import get_close_matches
 from enum import Enum
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -135,6 +135,31 @@ LLMProvider = Literal[
     "kimi",
 ]
 
+# ollama: local; bedrock: IAM; CLI providers: auth outside OPENAI-style env keys.
+LLM_PROVIDERS_WITHOUT_REQUIRED_KEY_ENV: Final[frozenset[str]] = frozenset(
+    {
+        "ollama",
+        "bedrock",
+        "codex",
+        "cursor",
+        "claude-code",
+        "gemini-cli",
+        "opencode",
+        "kimi",
+    }
+)
+
+# Hosted / API-key providers: env var names must stay aligned with from_env() and resolve_llm_api_key.
+LLM_PROVIDER_KEY_ENV: Final[dict[str, str]] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "requesty": "REQUESTY_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+}
+
 
 class LLMSettings(StrictConfigModel):
     """Strict runtime configuration for selecting and authenticating an LLM provider."""
@@ -201,17 +226,8 @@ class LLMSettings(StrictConfigModel):
 
     @model_validator(mode="after")
     def _require_api_key_for_selected_provider(self) -> "LLMSettings":
-        if self.provider in (
-            "ollama",
-            "bedrock",
-            "codex",
-            "cursor",
-            "claude-code",
-            "gemini-cli",
-            "opencode",
-            "kimi",
-        ):
-            return self  # ollama: local; bedrock: IAM; CLI providers: vendor auth
+        if self.provider in LLM_PROVIDERS_WITHOUT_REQUIRED_KEY_ENV:
+            return self
         provider_to_key = {
             "anthropic": self.anthropic_api_key,
             "openai": self.openai_api_key,
@@ -224,15 +240,7 @@ class LLMSettings(StrictConfigModel):
         if provider_to_key[self.provider]:
             return self
 
-        env_var = {
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "openrouter": "OPENROUTER_API_KEY",
-            "requesty": "REQUESTY_API_KEY",
-            "gemini": "GEMINI_API_KEY",
-            "nvidia": "NVIDIA_API_KEY",
-            "minimax": "MINIMAX_API_KEY",
-        }[self.provider]
+        env_var = LLM_PROVIDER_KEY_ENV[self.provider]
         raise ValueError(f"LLM provider '{self.provider}' requires {env_var} to be set.")
 
     @classmethod
