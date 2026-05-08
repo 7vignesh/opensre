@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import time
+
 from app.integrations.messaging_security import (
+    _MAX_PAIRING_ATTEMPTS,
+    _PAIRING_CODE_TTL_SECONDS,
     AuthorizationResult,
     MessagingIdentityPolicy,
     MessagingPlatform,
@@ -26,6 +30,8 @@ class TestMessagingIdentityPolicy:
         assert policy.allowed_chat_ids == []
         assert policy.require_dm_pairing is True
         assert policy.pairing_secret_hash is None
+        assert policy.pairing_created_at is None
+        assert policy.pairing_attempts == 0
         assert policy.rejection_behavior == RejectionBehavior.REPLY
         assert policy.inbound_enabled is False
 
@@ -121,16 +127,34 @@ class TestAuthorizeInboundMessage:
         assert not result.allowed
         assert "not enabled" in result.reason
 
-    def test_pairing_attempt_always_allowed(self) -> None:
-        policy = MessagingIdentityPolicy(inbound_enabled=True)
+    def test_pairing_attempt_allowed_when_pending(self) -> None:
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            pairing_secret_hash=hash_pairing_code("ABC123"),
+        )
         result = authorize_inbound_message(
             policy=policy, user_id="unknown", message_text="/pair ABC123"
         )
         assert result.allowed
         assert result.is_pairing_attempt
 
+    def test_pairing_attempt_rejected_when_no_pending(self) -> None:
+        """When no pairing is pending, /pair messages should be rejected."""
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            pairing_secret_hash=None,
+        )
+        result = authorize_inbound_message(
+            policy=policy, user_id="unknown", message_text="/pair ABC123"
+        )
+        assert not result.allowed
+        assert "no pairing" in result.reason.lower()
+
     def test_pairing_attempt_case_insensitive(self) -> None:
-        policy = MessagingIdentityPolicy(inbound_enabled=True)
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            pairing_secret_hash=hash_pairing_code("ABC123"),
+        )
         result = authorize_inbound_message(
             policy=policy, user_id="unknown", message_text="/Pair abc123"
         )
@@ -188,6 +212,17 @@ class TestAuthorizeInboundMessage:
         assert not result.allowed
         assert "not in the allowed chat" in result.reason
 
+    def test_chat_id_none_blocked_when_allowlist_configured(self) -> None:
+        """When allowed_chat_ids is set, None chat_id should be blocked."""
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            allowed_user_ids=["user1"],
+            allowed_chat_ids=["chat1"],
+        )
+        result = authorize_inbound_message(policy=policy, user_id="user1", chat_id=None)
+        assert not result.allowed
+        assert "not in the allowed chat" in result.reason
+
     def test_authorization_result_bool(self) -> None:
         allowed = AuthorizationResult(allowed=True, reason="ok")
         denied = AuthorizationResult(allowed=False, reason="no")
@@ -206,24 +241,28 @@ class TestCompletePairing:
         policy = MessagingIdentityPolicy(
             inbound_enabled=True,
             pairing_secret_hash=hash_pairing_code(code),
+            pairing_created_at=time.time(),
         )
         success, message = complete_pairing(policy=policy, user_id="new_user", code=code)
         assert success is True
         assert "successful" in message.lower()
         assert "new_user" in policy.allowed_user_ids
         assert policy.pairing_secret_hash is None
+        assert policy.pairing_attempts == 0
 
-    def test_pairing_wrong_code(self) -> None:
+    def test_pairing_wrong_code_increments_attempts(self) -> None:
         policy = MessagingIdentityPolicy(
             inbound_enabled=True,
             pairing_secret_hash=hash_pairing_code("CORRECT"),
+            pairing_created_at=time.time(),
         )
         success, message = complete_pairing(policy=policy, user_id="user1", code="WRONG1")
         assert success is False
         assert "invalid" in message.lower()
         assert "user1" not in policy.allowed_user_ids
-        # Hash should NOT be cleared on failure
+        # Hash should NOT be cleared on single failure
         assert policy.pairing_secret_hash is not None
+        assert policy.pairing_attempts == 1
 
     def test_pairing_no_pending(self) -> None:
         policy = MessagingIdentityPolicy(
@@ -240,10 +279,41 @@ class TestCompletePairing:
             inbound_enabled=True,
             allowed_user_ids=["existing_user"],
             pairing_secret_hash=hash_pairing_code(code),
+            pairing_created_at=time.time(),
         )
         success, _ = complete_pairing(policy=policy, user_id="existing_user", code=code)
         assert success is True
         assert policy.allowed_user_ids.count("existing_user") == 1
+
+    def test_brute_force_invalidates_code(self) -> None:
+        """After MAX_PAIRING_ATTEMPTS failures, the code is invalidated."""
+        code = "SECRET"
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            pairing_secret_hash=hash_pairing_code(code),
+            pairing_created_at=time.time(),
+        )
+        # Exhaust all attempts
+        for i in range(_MAX_PAIRING_ATTEMPTS):
+            success, _ = complete_pairing(policy=policy, user_id="attacker", code=f"WRONG{i}")
+            assert success is False
+
+        # Code should now be invalidated
+        assert policy.pairing_secret_hash is None
+        assert policy.pairing_attempts == 0
+
+    def test_expired_code_rejected(self) -> None:
+        """A pairing code that has exceeded its TTL is rejected."""
+        code = "EXPIRE"
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            pairing_secret_hash=hash_pairing_code(code),
+            pairing_created_at=time.time() - _PAIRING_CODE_TTL_SECONDS - 1,
+        )
+        success, message = complete_pairing(policy=policy, user_id="user1", code=code)
+        assert success is False
+        assert "expired" in message.lower()
+        assert policy.pairing_secret_hash is None
 
 
 # ---------------------------------------------------------------------------

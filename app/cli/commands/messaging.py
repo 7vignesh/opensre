@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import click
 from rich.console import Console
 
@@ -74,6 +76,8 @@ def pair_command(platform: str) -> None:
     # Generate pairing code
     code = generate_pairing_code()
     policy.pairing_secret_hash = hash_pairing_code(code)
+    policy.pairing_created_at = time.time()
+    policy.pairing_attempts = 0
     policy.require_dm_pairing = True
     policy.inbound_enabled = True
 

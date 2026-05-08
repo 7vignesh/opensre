@@ -4,17 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from app.cli.commands.messaging import messaging
-from app.integrations.messaging_security import (
-    MessagingIdentityPolicy,
-    hash_pairing_code,
-    verify_pairing_code,
-)
+from app.integrations.messaging_security import verify_pairing_code
 
 
 @pytest.fixture()

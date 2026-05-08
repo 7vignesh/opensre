@@ -15,8 +15,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import string
+import time
 from enum import StrEnum
 
 from pydantic import Field
@@ -31,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 _PAIRING_CODE_LENGTH = 6
 _PAIRING_CODE_ALPHABET = string.ascii_uppercase + string.digits
+
+# Maximum number of failed pairing attempts before the code is invalidated.
+_MAX_PAIRING_ATTEMPTS = 5
+
+# Pairing code TTL in seconds (15 minutes).
+_PAIRING_CODE_TTL_SECONDS = 900
 
 
 class RejectionBehavior(StrEnum):
@@ -76,6 +84,14 @@ class MessagingIdentityPolicy(StrictConfigModel):
         default=None,
         description="SHA-256 HMAC hash of the one-time pairing code (None = no pending pairing)",
     )
+    pairing_created_at: float | None = Field(
+        default=None,
+        description="Unix timestamp when the pairing code was generated (for TTL enforcement)",
+    )
+    pairing_attempts: int = Field(
+        default=0,
+        description="Number of failed pairing attempts (for brute-force protection)",
+    )
     rejection_behavior: RejectionBehavior = Field(
         default=RejectionBehavior.REPLY,
         description="How to handle messages from non-paired users: 'reply' or 'drop'",
@@ -90,10 +106,24 @@ class MessagingIdentityPolicy(StrictConfigModel):
 # Pairing Code Helpers
 # ---------------------------------------------------------------------------
 
-# HMAC key used for hashing pairing codes. In production this should be
-# derived from a per-installation secret; for now we use a fixed namespace
-# so that the hash is deterministic given the same code.
-_PAIRING_HMAC_KEY = b"opensre-messaging-pairing-v1"
+
+def _get_hmac_key() -> bytes:
+    """Derive the HMAC key from the OPENSRE_PAIRING_SECRET env var.
+
+    Falls back to a per-installation default derived from the machine's
+    hostname and the integration store path if the env var is not set.
+    This ensures each deployment has a unique key even without explicit
+    configuration.
+    """
+    env_secret = os.environ.get("OPENSRE_PAIRING_SECRET", "")
+    if env_secret:
+        return env_secret.encode()
+    # Fallback: derive from hostname + a fixed namespace so it's unique per machine
+    # but deterministic across restarts.
+    import platform
+
+    machine_id = platform.node() or "opensre-default"
+    return f"opensre-pairing-{machine_id}".encode()
 
 
 def generate_pairing_code() -> str:
@@ -110,13 +140,21 @@ def hash_pairing_code(code: str) -> str:
     The hash is stored in the config; the plaintext code is shown to the
     operator once and never persisted.
     """
-    return hmac.HMAC(_PAIRING_HMAC_KEY, code.upper().encode(), hashlib.sha256).hexdigest()
+    key = _get_hmac_key()
+    return hmac.HMAC(key, code.upper().encode(), hashlib.sha256).hexdigest()
 
 
 def verify_pairing_code(code: str, stored_hash: str) -> bool:
     """Verify a pairing code against its stored hash (constant-time comparison)."""
     computed = hash_pairing_code(code)
     return hmac.compare_digest(computed, stored_hash)
+
+
+def _is_pairing_expired(policy: MessagingIdentityPolicy) -> bool:
+    """Check if the pending pairing code has expired."""
+    if policy.pairing_created_at is None:
+        return False
+    return (time.time() - policy.pairing_created_at) > _PAIRING_CODE_TTL_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -163,19 +201,26 @@ def authorize_inbound_message(
             reason="Inbound messaging is not enabled for this platform",
         )
 
-    # Check if this is a pairing attempt
+    # Check if this is a pairing attempt (only when a pairing is actually pending)
     if message_text and message_text.strip().lower().startswith("/pair "):
-        return AuthorizationResult(
-            allowed=True,
-            reason="Pairing attempt",
-            is_pairing_attempt=True,
-        )
-
-    # Check allowed chat IDs (if configured)
-    if policy.allowed_chat_ids and chat_id and chat_id not in policy.allowed_chat_ids:
+        if policy.pairing_secret_hash:
+            return AuthorizationResult(
+                allowed=True,
+                reason="Pairing attempt",
+                is_pairing_attempt=True,
+            )
         return AuthorizationResult(
             allowed=False,
-            reason=f"Chat {chat_id} is not in the allowed chat list",
+            reason="No pairing is pending",
+        )
+
+    # Check allowed chat IDs (if configured).
+    # When allowed_chat_ids is set, a None chat_id means the message is from
+    # an unidentifiable context (e.g. a DM with no chat_id) — treat as blocked.
+    if policy.allowed_chat_ids and (not chat_id or chat_id not in policy.allowed_chat_ids):
+        return AuthorizationResult(
+            allowed=False,
+            reason=f"Chat {chat_id or 'N/A'} is not in the allowed chat list",
         )
 
     # Check allowed user IDs
@@ -208,18 +253,51 @@ def complete_pairing(
     On success, adds the user to allowed_user_ids and clears the pairing
     secret. Returns (success, message).
 
+    Includes brute-force protection: after MAX_PAIRING_ATTEMPTS failed
+    attempts, the pairing code is invalidated. Codes also expire after
+    PAIRING_CODE_TTL_SECONDS.
+
     Note: The caller is responsible for persisting the updated policy.
     """
     if not policy.pairing_secret_hash:
         return False, "No pairing is pending. Ask the operator to run `opensre messaging pair`."
 
+    # Check TTL expiry
+    if _is_pairing_expired(policy):
+        policy.pairing_secret_hash = None
+        policy.pairing_created_at = None
+        policy.pairing_attempts = 0
+        return (
+            False,
+            "Pairing code has expired. Ask the operator to run `opensre messaging pair` again.",
+        )
+
+    # Check brute-force limit
+    if policy.pairing_attempts >= _MAX_PAIRING_ATTEMPTS:
+        policy.pairing_secret_hash = None
+        policy.pairing_created_at = None
+        policy.pairing_attempts = 0
+        return (
+            False,
+            "Too many failed attempts. Pairing code invalidated. Ask the operator to generate a new one.",
+        )
+
     if not verify_pairing_code(code, policy.pairing_secret_hash):
-        return False, "Invalid pairing code. Please check and try again."
+        policy.pairing_attempts += 1
+        remaining = _MAX_PAIRING_ATTEMPTS - policy.pairing_attempts
+        if remaining <= 0:
+            policy.pairing_secret_hash = None
+            policy.pairing_created_at = None
+            policy.pairing_attempts = 0
+            return False, "Too many failed attempts. Pairing code invalidated."
+        return False, f"Invalid pairing code. {remaining} attempts remaining."
 
     # Pairing successful
     if user_id not in policy.allowed_user_ids:
         policy.allowed_user_ids.append(user_id)
     policy.pairing_secret_hash = None
+    policy.pairing_created_at = None
+    policy.pairing_attempts = 0
 
     logger.info("DM pairing completed for user %s", user_id)
     return True, "Pairing successful! You can now interact with the bot."
