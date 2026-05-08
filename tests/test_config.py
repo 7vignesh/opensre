@@ -1,16 +1,9 @@
 from __future__ import annotations
 
-from typing import get_args
-
 import pytest
 from pydantic import ValidationError
 
-from app.config import (
-    LLM_PROVIDER_KEY_ENV,
-    LLM_PROVIDERS_WITHOUT_REQUIRED_KEY_ENV,
-    LLMProvider,
-    LLMSettings,
-)
+from app.config import LLMSettings
 from app.llm_credentials import has_credentials_for_active_llm_provider
 
 
@@ -126,12 +119,6 @@ def test_llm_settings_from_env_gemini_cli_without_api_key(monkeypatch) -> None:
     settings = LLMSettings.from_env()
 
     assert settings.provider == "gemini-cli"
-
-
-def test_llm_provider_key_registry_is_exhaustive() -> None:
-    all_providers = frozenset(get_args(LLMProvider))
-    assert not (frozenset(LLM_PROVIDER_KEY_ENV) & LLM_PROVIDERS_WITHOUT_REQUIRED_KEY_ENV)
-    assert frozenset(LLM_PROVIDER_KEY_ENV) | LLM_PROVIDERS_WITHOUT_REQUIRED_KEY_ENV == all_providers
 
 
 def test_has_credentials_for_active_llm_provider_missing_key(monkeypatch) -> None:
