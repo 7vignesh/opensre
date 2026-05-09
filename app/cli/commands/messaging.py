@@ -39,6 +39,7 @@ def _save_identity_policy(
     service: str, record: dict | None, policy: MessagingIdentityPolicy
 ) -> None:
     """Persist the identity policy back into the integration store."""
+    entry: dict[str, object]
     if record is None:
         # Create a minimal record — the operator should configure the full
         # integration via the wizard, but we need somewhere to store the policy.
@@ -47,6 +48,9 @@ def _save_identity_policy(
         credentials = dict(record.get("credentials", {}))
         credentials["identity_policy"] = policy.model_dump(mode="json")
         entry = {"credentials": credentials}
+        record_id = record.get("id")
+        if record_id:
+            entry["id"] = record_id
     upsert_integration(service, entry)
 
 

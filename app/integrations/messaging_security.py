@@ -110,10 +110,15 @@ class MessagingIdentityPolicy(StrictConfigModel):
 def _get_hmac_key() -> bytes:
     """Derive the HMAC key from the OPENSRE_PAIRING_SECRET env var.
 
-    Falls back to a per-installation default derived from the machine's
-    hostname and the integration store path if the env var is not set.
-    This ensures each deployment has a unique key even without explicit
-    configuration.
+    **Production requirement**: Set ``OPENSRE_PAIRING_SECRET`` to a strong,
+    unique secret in production deployments. Without it, the fallback key is
+    derived from the machine hostname, which is not secret — if the stored
+    hash leaks, an attacker could brute-force the 6-char code space offline.
+    The 5-attempt online limit does not protect against offline attacks on a
+    leaked hash.
+
+    Falls back to a per-machine default derived from the hostname so that
+    local development and testing work without extra configuration.
     """
     env_secret = os.environ.get("OPENSRE_PAIRING_SECRET", "")
     if env_secret:
