@@ -77,6 +77,8 @@ def pair_command(platform: str) -> None:
     service = platform.lower()
     record, policy = _load_identity_policy(service)
 
+    was_disabled = not policy.inbound_enabled
+
     # Generate pairing code
     code = generate_pairing_code()
     policy.pairing_secret_hash = hash_pairing_code(code)
@@ -87,10 +89,12 @@ def pair_command(platform: str) -> None:
 
     _save_identity_policy(service, record, policy)
 
+    if was_disabled:
+        _console.print(f"[yellow]Note: inbound messaging has been enabled for {platform}.[/yellow]")
     _console.print(f"\n[bold green]Pairing code generated for {platform}:[/bold green]")
     _console.print(f"\n  [bold yellow]{code}[/bold yellow]\n")
     _console.print(f"Send this to the bot via DM: [dim]/pair {code}[/dim]")
-    _console.print("[dim]The code is single-use and will expire once used.[/dim]\n")
+    _console.print("[dim]The code is single-use and will expire in 15 minutes.[/dim]\n")
 
 
 @messaging.command("allow")
@@ -118,9 +122,13 @@ def allow_command(platform: str, user_id: str) -> None:
         )
         return
 
+    was_disabled = not policy.inbound_enabled
     policy.allowed_user_ids.append(user_id)
     policy.inbound_enabled = True
     _save_identity_policy(service, record, policy)
+
+    if was_disabled:
+        _console.print(f"[yellow]Note: inbound messaging has been enabled for {platform}.[/yellow]")
 
     _console.print(f"[green]Added user {user_id} to {platform} allowed list.[/green]")
 

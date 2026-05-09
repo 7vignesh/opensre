@@ -223,6 +223,19 @@ class TestAuthorizeInboundMessage:
         assert not result.allowed
         assert "not in the allowed chat" in result.reason
 
+    def test_pairing_blocked_from_restricted_chat(self) -> None:
+        """Pairing attempts from outside allowed_chat_ids are blocked."""
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            allowed_chat_ids=["chat1"],
+            pairing_secret_hash=hash_pairing_code("CODE01"),
+        )
+        result = authorize_inbound_message(
+            policy=policy, user_id="anyone", chat_id="other_chat", message_text="/pair CODE01"
+        )
+        assert not result.allowed
+        assert "not in the allowed chat" in result.reason
+
     def test_authorization_result_bool(self) -> None:
         allowed = AuthorizationResult(allowed=True, reason="ok")
         denied = AuthorizationResult(allowed=False, reason="no")
@@ -309,6 +322,19 @@ class TestCompletePairing:
             inbound_enabled=True,
             pairing_secret_hash=hash_pairing_code(code),
             pairing_created_at=time.time() - _PAIRING_CODE_TTL_SECONDS - 1,
+        )
+        success, message = complete_pairing(policy=policy, user_id="user1", code=code)
+        assert success is False
+        assert "expired" in message.lower()
+        assert policy.pairing_secret_hash is None
+
+    def test_missing_pairing_created_at_treated_as_expired(self) -> None:
+        """A hash with no timestamp (legacy or corrupted) is treated as expired."""
+        code = "LEGACY"
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            pairing_secret_hash=hash_pairing_code(code),
+            pairing_created_at=None,
         )
         success, message = complete_pairing(policy=policy, user_id="user1", code=code)
         assert success is False

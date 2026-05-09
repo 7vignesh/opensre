@@ -156,9 +156,14 @@ def verify_pairing_code(code: str, stored_hash: str) -> bool:
 
 
 def _is_pairing_expired(policy: MessagingIdentityPolicy) -> bool:
-    """Check if the pending pairing code has expired."""
+    """Check if the pending pairing code has expired.
+
+    Returns True when pairing_created_at is None (missing timestamp is
+    treated as expired to be safe — legacy hashes without a timestamp
+    should be regenerated).
+    """
     if policy.pairing_created_at is None:
-        return False
+        return True
     return (time.time() - policy.pairing_created_at) > _PAIRING_CODE_TTL_SECONDS
 
 
@@ -206,6 +211,16 @@ def authorize_inbound_message(
             reason="Inbound messaging is not enabled for this platform",
         )
 
+    # Check allowed chat IDs first (if configured).
+    # This runs before the /pair check so that pairing cannot bypass chat restrictions.
+    # When allowed_chat_ids is set, a None chat_id means the message is from
+    # an unidentifiable context (e.g. a DM with no chat_id) — treat as blocked.
+    if policy.allowed_chat_ids and (not chat_id or chat_id not in policy.allowed_chat_ids):
+        return AuthorizationResult(
+            allowed=False,
+            reason=f"Chat {chat_id or 'N/A'} is not in the allowed chat list",
+        )
+
     # Check if this is a pairing attempt (only when a pairing is actually pending)
     if message_text and message_text.strip().lower().startswith("/pair "):
         if policy.pairing_secret_hash:
@@ -217,15 +232,6 @@ def authorize_inbound_message(
         return AuthorizationResult(
             allowed=False,
             reason="No pairing is pending",
-        )
-
-    # Check allowed chat IDs (if configured).
-    # When allowed_chat_ids is set, a None chat_id means the message is from
-    # an unidentifiable context (e.g. a DM with no chat_id) — treat as blocked.
-    if policy.allowed_chat_ids and (not chat_id or chat_id not in policy.allowed_chat_ids):
-        return AuthorizationResult(
-            allowed=False,
-            reason=f"Chat {chat_id or 'N/A'} is not in the allowed chat list",
         )
 
     # Check allowed user IDs
