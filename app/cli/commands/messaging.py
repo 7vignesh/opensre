@@ -182,6 +182,11 @@ def revoke_command(platform: str, user_id: str) -> None:
         return
 
     policy.allowed_user_ids.remove(user_id)
+    # Clear any pending pairing code so the revoked user cannot re-pair via a
+    # code that was generated after their revocation.
+    policy.pairing_secret_hash = None
+    policy.pairing_created_at = None
+    policy.pairing_attempts = 0
     _save_identity_policy(service, record, policy)
 
     _console.print(f"[green]Removed user {user_id} from {platform} allowed list.[/green]")
