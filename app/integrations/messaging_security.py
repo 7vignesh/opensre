@@ -230,6 +230,12 @@ def authorize_inbound_message(
             reason=f"Chat {chat_id or 'N/A'} is not in the allowed chat list",
         )
 
+    # Already-authorized users skip the pairing path entirely.
+    # This prevents an allowed user from accidentally consuming a pending
+    # pairing code meant for someone else.
+    if user_id in policy.allowed_user_ids:
+        return AuthorizationResult(allowed=True, reason="User is authorized")
+
     # Check if this is a pairing attempt (only when a pairing is actually pending)
     if message_text and message_text.strip().lower().startswith("/pair "):
         if policy.pairing_secret_hash:
@@ -250,16 +256,12 @@ def authorize_inbound_message(
                 allowed=False,
                 reason="No users have been paired yet. Use /pair <code> to pair.",
             )
-        # If pairing is not required and no allowlist, allow all
         return AuthorizationResult(allowed=True, reason="No allowlist configured, open access")
 
-    if user_id not in policy.allowed_user_ids:
-        return AuthorizationResult(
-            allowed=False,
-            reason=f"User {user_id} is not in the allowed users list",
-        )
-
-    return AuthorizationResult(allowed=True, reason="User is authorized")
+    return AuthorizationResult(
+        allowed=False,
+        reason=f"User {user_id} is not in the allowed users list",
+    )
 
 
 def complete_pairing(
