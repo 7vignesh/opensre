@@ -279,7 +279,10 @@ def complete_pairing(
     attempts, the pairing code is invalidated. Codes also expire after
     PAIRING_CODE_TTL_SECONDS.
 
-    Note: The caller is responsible for persisting the updated policy.
+    IMPORTANT: The caller MUST persist the updated policy after every call,
+    regardless of the return value. Failed attempts increment
+    pairing_attempts; if the caller only persists on success, the counter
+    resets on the next load and brute-force protection is defeated.
     """
     if not policy.pairing_secret_hash:
         return False, "No pairing is pending. Ask the operator to run `opensre messaging pair`."
