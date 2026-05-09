@@ -147,6 +147,8 @@ class RegisteredTool:
     cost_tier: CostTier | None = None
     requires_approval: bool = False
     approval_reason: str = ""
+    approval_expiry_seconds: int = 300
+    approval_scope: str = "one_shot"
     origin_module: str = ""
     origin_name: str = ""
 
@@ -245,6 +247,8 @@ class RegisteredTool:
             cost_tier=resolved_cost_tier,
             requires_approval=getattr(tool.__class__, "requires_approval", False),
             approval_reason=getattr(tool.__class__, "approval_reason", ""),
+            approval_expiry_seconds=getattr(tool.__class__, "approval_expiry_seconds", 300),
+            approval_scope=getattr(tool.__class__, "approval_scope", "one_shot"),
             origin_module=tool.__class__.__module__,
             origin_name=tool.__class__.__name__,
         )

@@ -66,6 +66,15 @@ class MessagingIdentityPolicy(StrictConfigModel):
 
     Controls which users are allowed to interact with the bot and how
     unauthenticated users are handled.
+
+    IMPORTANT — Stable IDs only:
+    All identity fields (allowed_user_ids, allowed_chat_ids) MUST use
+    platform-native stable identifiers, never display names or handles:
+      - Telegram: numeric ``from.id`` (survives username changes)
+      - Slack: ``U02ABC123`` user ID (not @display-name)
+      - Discord: snowflake user ID (not username#discriminator)
+    Handles are for human-facing rendering only. Keying trust decisions
+    on handles is an impersonation vector (handles can be reassigned).
     """
 
     allowed_user_ids: list[str] = Field(
