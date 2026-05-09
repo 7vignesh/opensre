@@ -13,7 +13,7 @@ from app.integrations.messaging_security import (
     generate_pairing_code,
     hash_pairing_code,
 )
-from app.integrations.store import get_integration, upsert_instance, upsert_integration
+from app.integrations.store import get_integration, upsert_instance
 
 _console = Console(highlight=False)
 
@@ -40,15 +40,21 @@ def _save_identity_policy(
 ) -> None:
     """Persist the identity policy back into the integration store.
 
-    Uses upsert_instance to update only the target instance's credentials,
-    preserving other instances (e.g. "prod", "staging") in multi-instance
-    integration records.
+    Uses upsert_instance for both new and existing records to ensure a
+    consistent code path. When no record exists, upsert_instance creates
+    one automatically. This avoids the problem where a later
+    upsert_integration call (e.g. from the wizard) would replace the
+    stub record and silently drop the identity_policy.
     """
     if record is None:
-        # No existing record — create one with a single default instance.
-        upsert_integration(
+        # No existing record — upsert_instance will create one.
+        upsert_instance(
             service,
-            {"credentials": {"identity_policy": policy.model_dump(mode="json")}},
+            {
+                "name": "default",
+                "tags": {},
+                "credentials": {"identity_policy": policy.model_dump(mode="json")},
+            },
         )
     else:
         # Read the existing instance name and credentials, merge the policy,
