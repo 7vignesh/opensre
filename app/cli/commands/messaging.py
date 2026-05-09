@@ -13,7 +13,7 @@ from app.integrations.messaging_security import (
     generate_pairing_code,
     hash_pairing_code,
 )
-from app.integrations.store import get_integration, upsert_integration
+from app.integrations.store import get_integration, upsert_instance, upsert_integration
 
 _console = Console(highlight=False)
 
@@ -38,20 +38,37 @@ def _load_identity_policy(service: str) -> tuple[dict | None, MessagingIdentityP
 def _save_identity_policy(
     service: str, record: dict | None, policy: MessagingIdentityPolicy
 ) -> None:
-    """Persist the identity policy back into the integration store."""
-    entry: dict[str, object]
+    """Persist the identity policy back into the integration store.
+
+    Uses upsert_instance to update only the target instance's credentials,
+    preserving other instances (e.g. "prod", "staging") in multi-instance
+    integration records.
+    """
     if record is None:
-        # Create a minimal record — the operator should configure the full
-        # integration via the wizard, but we need somewhere to store the policy.
-        entry = {"credentials": {"identity_policy": policy.model_dump(mode="json")}}
+        # No existing record — create one with a single default instance.
+        upsert_integration(
+            service,
+            {"credentials": {"identity_policy": policy.model_dump(mode="json")}},
+        )
     else:
+        # Read the existing instance name and credentials, merge the policy,
+        # and write back only that instance.
+        instances = record.get("instances", [])
+        first_instance = instances[0] if instances else {}
+        instance_name = (
+            first_instance.get("name", "default") if isinstance(first_instance, dict) else "default"
+        )
         credentials = dict(record.get("credentials", {}))
         credentials["identity_policy"] = policy.model_dump(mode="json")
-        entry = {"credentials": credentials}
-        record_id = record.get("id")
-        if record_id:
-            entry["id"] = record_id
-    upsert_integration(service, entry)
+        upsert_instance(
+            service,
+            {
+                "name": instance_name,
+                "tags": first_instance.get("tags", {}) if isinstance(first_instance, dict) else {},
+                "credentials": credentials,
+            },
+            record_id=record.get("id"),
+        )
 
 
 @click.group("messaging")

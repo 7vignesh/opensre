@@ -713,10 +713,19 @@ class TelegramBotConfig(StrictConfigModel):
 
 
 class SlackBotConfig(StrictConfigModel):
-    """Slack Bot (Events API) runtime config for inbound messaging."""
+    """Slack Bot (Events API) runtime config for inbound messaging.
+
+    NOTE: ``signing_secret`` defaults to empty for backward compatibility,
+    but MUST be set in production when inbound messaging is enabled.
+    Without it, the Slack Events API webhook handler cannot verify request
+    authenticity and will accept forged requests from any source.
+    """
 
     bot_token: str
-    signing_secret: str = ""
+    signing_secret: str = Field(
+        default="",
+        description="Slack signing secret for webhook HMAC verification. MUST be set for inbound.",
+    )
     app_id: str = ""
     identity_policy: dict[str, object] | None = Field(
         default=None,
