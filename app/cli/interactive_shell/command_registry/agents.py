@@ -1,21 +1,29 @@
 """Slash command: ``/agents`` (registered local AI agent fleet view).
 
 Bare ``/agents`` renders the registered-agents dashboard; subcommands
-drill into specific surfaces (currently ``budget``, ``claim``, ``conflicts``,
-``release``, with more landing as the monitor-local-agents initiative ships).
+cover ``budget``, ``bus``, ``claim``, ``conflicts``, ``kill``, ``release``,
+and ``trace`` (with more surfaces planned for monitor-local-agents).
 """
 
 from __future__ import annotations
 
 import math
 import os
+import time
+from collections import defaultdict
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 
+from prompt_toolkit.patch_stdout import patch_stdout
 from pydantic import ValidationError
 from rich.console import Console
+from rich.live import Live
 from rich.markup import escape
+from rich.text import Text
+from rich.tree import Tree
 
+from app.agents.bus import BusMessage, subscribe
 from app.agents.config import (
     agents_config_path,
     load_agents_config,
@@ -28,23 +36,81 @@ from app.agents.conflicts import (
     render_conflicts,
 )
 from app.agents.coordination import BranchClaims
+from app.agents.discovery import registered_and_discovered_agents
 from app.agents.lifecycle import TerminateResult, terminate
 from app.agents.registry import AgentRegistry
+from app.agents.tail import AttachSession, AttachUnsupported, attach
 from app.analytics.events import Event
 from app.analytics.provider import get_analytics
-from app.cli.interactive_shell.agents_view import render_agents_table
 from app.cli.interactive_shell.command_registry.types import SlashCommand
-from app.cli.interactive_shell.rendering import repl_table
-from app.cli.interactive_shell.session import ReplSession
-from app.cli.interactive_shell.theme import BOLD_BRAND, DIM, ERROR, HIGHLIGHT, WARNING
+from app.cli.interactive_shell.runtime import ReplSession
+from app.cli.interactive_shell.ui import (
+    BOLD_BRAND,
+    DIM,
+    ERROR,
+    HIGHLIGHT,
+    WARNING,
+    render_agents_table,
+    repl_table,
+)
 
 _AGENTS_FIRST_ARGS: tuple[tuple[str, str], ...] = (
     ("budget", "view or edit per-agent hourly budgets"),
+    ("bus", "live-tail the cross-agent context bus"),
     ("claim", "claim a branch for an agent"),
     ("conflicts", "show file-write conflicts between local AI agents"),
     ("kill", "SIGTERM → SIGKILL a local agent by PID"),
     ("release", "release a branch claim"),
+    ("trace", "live tail of an agent's stdout by pid"),
+    ("graph", "render the wait-on dependency graph as a tree"),
+    ("wait", "mark <pid> as waiting on another pid: /agent wait <pid> --on <other-pid>"),
 )
+
+_TRACE_REFRESH_PER_SECOND = 10
+# Match the throttle period to ``Live``'s refresh rate: under a 1k-line/sec
+# agent the reader thread can publish chunks faster than Rich actually
+# paints, and each ``live.update(Text.from_ansi(...))`` we make in
+# excess just creates a Renderable Rich will discard at the next paint.
+# Throttling the *call* to ``Live`` to one period bounds CPU under burst
+# writers without affecting how fast the screen updates.
+_TRACE_RENDER_PERIOD_S = 1.0 / _TRACE_REFRESH_PER_SECOND
+# Cap the on-screen render to the most recent slice of the 4 MiB buffer
+# so we don't reparse a 4 MiB string through Rich at 10 fps under burst
+# writers. A few screens of context is plenty for "what is the agent
+# doing right now"; the full tail is still in ``sess.buffer`` for any
+# future drill-down view.
+_TRACE_RENDER_TAIL_BYTES = 64 * 1024
+
+
+def _render_trace_snapshot(live: Live, sess: AttachSession) -> None:
+    """Decode the bounded snapshot with UTF-8 boundary safety for ``Live``.
+
+    ANSI sequences are interpreted (Rich); treat traced output like unfiltered ``kubectl logs``.
+    """
+    snapshot = _slice_to_utf8_boundary(sess.buffer.snapshot(), _TRACE_RENDER_TAIL_BYTES)
+    live.update(Text.from_ansi(snapshot.decode("utf-8", errors="replace")))
+
+
+def _slice_to_utf8_boundary(data: bytes, max_bytes: int) -> bytes:
+    """Return the suffix of ``data`` that fits in ``max_bytes`` and starts
+    on a UTF-8 codepoint boundary.
+
+    A plain ``data[-max_bytes:]`` can land mid-codepoint, which decodes to
+    a leading U+FFFD under ``errors="replace"`` — visible as a stray
+    replacement character at the top of the live view. ``TailBuffer``
+    preserves boundaries by dropping whole chunks; we have to do the same
+    once we re-flatten and slice on the render side. UTF-8 continuation
+    bytes match ``10xxxxxx`` (``b & 0xC0 == 0x80``); a codepoint is at
+    most 4 bytes, so we walk forward at most 3 continuation bytes to
+    reach the next start byte.
+    """
+    if len(data) <= max_bytes:
+        return data
+    sliced = data[-max_bytes:]
+    start = 0
+    while start < 4 and start < len(sliced) and (sliced[start] & 0xC0) == 0x80:
+        start += 1
+    return sliced[start:]
 
 
 def _opensre_agent_id() -> str:
@@ -64,17 +130,52 @@ def _print_config_error(console: Console, exc: ValidationError) -> None:
 
 
 def _cmd_agents_list(console: Console) -> bool:
-    """Render the registered ``AgentRecord`` set as a Rich table.
+    """Render registered plus read-only discovered agents as a Rich table.
 
-    Bare ``/agents`` resolves here. The ``$/hr`` cell reads
-    ``hourly_budget_usd`` from ``agents.yaml``; the remaining metric
-    cells (``cpu%``, ``tokens/min``, ``status``, ``uptime``) still
-    render as placeholders until the per-PID sampler and token-meter
-    consumer from #1490 land.
+    Bare ``/agents`` resolves here. Explicit registry rows keep winning
+    on PID collisions; process discovery fills in Cursor, Claude Code,
+    Codex, Aider, and Gemini CLI sessions that the user never registered.
     """
     registry = AgentRegistry()
-    table = render_agents_table(registry.list())
+    table = render_agents_table(registered_and_discovered_agents(registry))
     console.print(table)
+    return True
+
+
+def _format_bus_message(msg: BusMessage) -> str:
+    """Render one ``BusMessage`` as ``[agent] path — summary`` (path optional)."""
+    parts = [f"[{HIGHLIGHT}]\\[{escape(msg.agent)}][/]"]
+    if msg.path:
+        parts.append(escape(msg.path))
+        parts.append("—")
+    parts.append(escape(msg.summary))
+    return " ".join(parts)
+
+
+def _cmd_agents_bus(console: Console) -> bool:
+    """Live-tail the cross-agent context bus until ``Ctrl-C`` or broker exit.
+
+    Self-elects a broker if none is running, then streams each ``BusMessage``
+    as it arrives. The loop ends in three ways, each with explicit feedback:
+    ``KeyboardInterrupt`` (user detached), broker disconnect (e.g. the
+    publishing process exited), or socket error.
+    """
+    console.print(
+        f"[{DIM}]tailing /agents bus — Ctrl-C to exit[/]",
+    )
+    try:
+        for msg in subscribe():
+            console.print(_format_bus_message(msg))
+    except KeyboardInterrupt:
+        console.print(f"[{DIM}](detached)[/]")
+        return True
+    except OSError as exc:
+        console.print(f"[{ERROR}]bus error:[/] {escape(str(exc))}")
+        return False
+    # ``subscribe()`` returned cleanly — the broker closed our connection
+    # (e.g. it stopped, or its host process exited). Surface that explicitly
+    # so the user isn't left wondering why the prompt came back.
+    console.print(f"[{DIM}]bus broker disconnected[/]")
     return True
 
 
@@ -331,6 +432,222 @@ def _cmd_agents_kill(
     return True
 
 
+def _render_live_tail(console: Console, label: str, sess: AttachSession) -> None:
+    """kubectl-logs-style render: a single Ctrl+C returns to the prompt.
+
+    Catches :class:`KeyboardInterrupt` inside the ``Live`` block and
+    swallows it so the REPL doesn't see a traceback. ``stream_to_console``
+    in ``streaming.py`` uses a double-press pattern because it's
+    rendering an LLM response that the user might *not* want to abort
+    on a stray keypress; a logs-style view is the inverse — one press
+    is the canonical "stop" signal.
+    """
+    console.print(f"[{BOLD_BRAND}]trace {escape(label)}[/]  [{DIM}]Ctrl+C to stop[/]")
+    isatty = getattr(console.file, "isatty", None)
+    stdout_context = patch_stdout(raw=True) if callable(isatty) and isatty() else nullcontext()
+    try:
+        with (
+            stdout_context,
+            Live(
+                Text(""),
+                console=console,
+                refresh_per_second=_TRACE_REFRESH_PER_SECOND,
+                transient=False,
+                vertical_overflow="visible",
+            ) as live,
+        ):
+            # Iterating ``sess`` is what drains the reader queue and
+            # appends to ``sess.buffer`` — the loop body only needs the
+            # *side effect* of advancing, not the chunk value, so the
+            # iteration variable is intentionally discarded.
+            # Seeded at 0.0 so the first iteration always renders (any
+            # ``time.monotonic() - 0.0`` clears the period); the throttle
+            # kicks in from the second iteration onward.
+            last_render = 0.0
+            pending = False
+            for _ in sess:
+                now = time.monotonic()
+                if now - last_render >= _TRACE_RENDER_PERIOD_S:
+                    _render_trace_snapshot(live, sess)
+                    last_render = now
+                    pending = False
+                else:
+                    pending = True
+            # Final flush: the last chunk(s) may have arrived inside a
+            # throttle window; render once after the loop so the user
+            # sees the very latest state instead of whatever was on
+            # screen at the last gated update.
+            if pending:
+                _render_trace_snapshot(live, sess)
+    except KeyboardInterrupt:
+        # kubectl-logs-style: a single Ctrl+C ends the trace and returns
+        # to the REPL prompt without propagating a traceback. The
+        # ``with sess:`` in the caller still runs and joins the reader
+        # thread, so this swallow is safe.
+        pass
+    if sess.producer_exited:
+        # Distinguish "the agent died and we noticed" from "the user
+        # asked us to stop" so a long unattended trace doesn't look the
+        # same as a Ctrl+C abort.
+        console.print(f"[{DIM}]· process exited[/]")
+    console.print(f"[{DIM}]· trace ended[/]")
+
+
+def _cmd_agents_trace(session: ReplSession, console: Console, args: list[str]) -> bool:
+    """Live-tail an agent's stdout by pid; see :func:`_render_live_tail`.
+
+    Validates eagerly (``attach()`` raises :class:`AttachUnsupported`
+    synchronously on bad pid / unsupported fd type / missing file) so
+    we never enter the ``Live`` block on a target we cannot tail.
+    """
+    if len(args) != 1:
+        console.print(f"[{ERROR}]usage:[/] /agents trace <pid>")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+    try:
+        pid = int(args[0])
+    except ValueError:
+        console.print(f"[{ERROR}]invalid pid:[/] {escape(args[0])}")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    record = AgentRegistry().get(pid)
+    label = f"{record.name} (pid {pid})" if record else f"pid {pid}"
+
+    try:
+        sess = attach(pid)
+    except AttachUnsupported as exc:
+        console.print(f"[{ERROR}]cannot trace {escape(label)}:[/] {escape(exc.reason)}")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    with sess:
+        _render_live_tail(console, label, sess)
+    return True
+
+
+def _cmd_agents_wait(session: ReplSession, console: Console, args: list[str]) -> bool:
+    """Handle ``/agents wait <pid> --on <other-pid>``.
+
+    Parse the two pids out of ``args``, registers the dependency in the agent registry.
+    """
+    if len(args) != 3 or args[1] != "--on":
+        console.print(f"[{ERROR}]usage:[/] /agents wait <pid> --on <other-pid>")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    try:
+        pid = int(args[0])
+    except ValueError:
+        console.print(f"[{ERROR}]invalid pid:[/] {escape(args[0])}")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    try:
+        on_pid = int(args[2])
+    except ValueError:
+        console.print(f"[{ERROR}]invalid other-pid:[/] {escape(args[2])}")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    if pid == on_pid:
+        console.print(f"[{ERROR}]invalid pid:[/] {pid} waiting for itself")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    registry = AgentRegistry()
+    waiter = registry.get(pid)
+    if waiter is None:
+        console.print(f"[{ERROR}]pid {pid} is not in the agent registry[/]")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    target = registry.get(on_pid)
+    if target is None:
+        console.print(f"[{ERROR}]pid {on_pid} is not in the agent registry[/]")
+        session.mark_latest(ok=False, kind="slash")
+        return True
+
+    waiter = waiter.add_waits_on(target)
+    registry.register(waiter)
+    console.print(
+        f"[{HIGHLIGHT}]{escape(waiter.name)} (pid {pid}) now waits on "
+        f"{escape(target.name)} (pid {on_pid}).[/]"
+    )
+    return True
+
+
+def _cmd_agents_graph(console: Console) -> bool:
+    """Render the ``waits_on`` dependency graph as a Rich tree.
+
+    Single-pass DFS over the inverse ``waits_on`` edges (depended-on
+    -> waiter), building the Rich tree as it descends. A back edge — a
+    pid re-encountered while still in the active path — is the
+    canonical cycle witness for a directed graph; a warning naming the agents
+    in the loop is emitted instead.
+    """
+
+    def _label(pid: int, ppid: int | None = None) -> str:
+        r = records[pid]
+        if ppid is None:
+            return f"{escape(r.name)} ({pid}) \\[active]"
+
+        pr = records[ppid]
+        return f"{escape(r.name)} ({pid}) \\[waiting on {escape(pr.name)}]"
+
+    def _walk(pid: int, parent: Tree, path: list[int], visited: set[int]) -> list[int] | None:
+        for child in waiters_of.get(pid, []):
+            if child in visited:
+                return path[path.index(child) :] + [child]
+
+            path.append(child)
+            visited.add(child)
+            node = parent.add(_label(child, pid))
+            c = _walk(child, node, path, visited)
+            if c is not None:
+                return c
+
+            path.pop()
+            visited.remove(child)
+        return None
+
+    registry = AgentRegistry()
+    records = {r.pid: r for r in registry.list()}
+    if not records:
+        console.print(f"[{DIM}]no registered agents[/]")
+        return True
+
+    waiters_of: dict[int, list[int]] = defaultdict(list)
+    for record in records.values():
+        for on_pid in record.waits_on:
+            waiters_of[on_pid].append(record.pid)
+
+    # Roots are pids that wait on nothing. If every pid waits on
+    # something the graph is fully covered by a cycle — fall back to
+    # all pids so the walker enters somewhere and surfaces the back
+    # edge instead of silently exiting on an empty root list.
+    roots = [pid for pid, r in records.items() if not r.waits_on] or list(records)
+
+    trees: list[Tree] = []
+    chain: str | None = None
+    for root in roots:
+        tree = Tree(label=_label(root))
+        cycle = _walk(root, tree, [root], {root})
+        if cycle is not None:
+            chain = " -> ".join(f"{records[p].name} ({p})" for p in cycle)
+            break
+        trees.append(tree)
+
+    for i, tree in enumerate(trees):
+        console.print(tree)
+        if i != len(trees) - 1 and chain is None:
+            console.line()
+
+    if chain is not None:
+        console.print(f"[{WARNING}]: agent dependency cycle detected: {escape(chain)}.[/]")
+    return True
+
+
 def _cmd_agents(session: ReplSession, console: Console, args: list[str]) -> bool:
     if not args:
         return _cmd_agents_list(console)
@@ -339,6 +656,8 @@ def _cmd_agents(session: ReplSession, console: Console, args: list[str]) -> bool
 
     if sub == "budget":
         return _cmd_agents_budget(session, console, args[1:])
+    if sub == "bus":
+        return _cmd_agents_bus(console)
     if sub == "conflicts":
         return _cmd_agents_conflicts(console)
 
@@ -351,11 +670,22 @@ def _cmd_agents(session: ReplSession, console: Console, args: list[str]) -> bool
     if sub == "release":
         return _cmd_agents_release(session, console, args[1:])
 
+    if sub == "trace":
+        return _cmd_agents_trace(session, console, args[1:])
+
+    if sub == "wait":
+        return _cmd_agents_wait(session, console, args[1:])
+
+    if sub == "graph":
+        return _cmd_agents_graph(console)
+
     console.print(
         f"[{ERROR}]unknown subcommand:[/] {escape(sub)}  "
         "(try [bold]/agents[/bold], [bold]/agents budget[/bold], "
+        "[bold]/agents bus[/bold], [bold]/agents claim[/bold], "
         "[bold]/agents conflicts[/bold], [bold]/agents kill[/bold], "
-        "[bold]/agents claim[/bold], or [bold]/agents release[/bold])"
+        "[bold]/agents release[/bold], [bold]/agents trace[/bold], "
+        "[bold]/agents wait[/bold] or [bold]/agents graph[/bold])"
     )
     session.mark_latest(ok=False, kind="slash")
     return True
@@ -364,7 +694,8 @@ def _cmd_agents(session: ReplSession, console: Console, args: list[str]) -> bool
 COMMANDS: list[SlashCommand] = [
     SlashCommand(
         "/agents",
-        "show registered local AI agents (subcommands: budget, claim, conflicts, kill, release)",
+        "show registered local AI agents (subcommands: budget, bus, claim, conflicts, kill, "
+        "release, trace, wait, graph)",
         _cmd_agents,
         first_arg_completions=_AGENTS_FIRST_ARGS,
     ),

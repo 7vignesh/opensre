@@ -44,6 +44,8 @@ from nacl.signing import VerifyKey
 from pydantic import BaseModel
 from starlette.responses import JSONResponse, StreamingResponse
 
+from app.analytics.cli import capture_investigation_failed, track_investigation
+from app.analytics.source import EntrypointSource, TriggerMode
 from app.cli.support.cli_error_mapping import reraise_cli_runtime_error
 from app.cli.support.errors import OpenSREError
 from app.remote.vercel_poller import (
@@ -58,7 +60,9 @@ from app.version import get_version
 load_dotenv(override=False)
 init_sentry(entrypoint="remote")
 
-INVESTIGATIONS_DIR = Path(os.getenv("INVESTIGATIONS_DIR", "/opt/opensre/investigations"))
+INVESTIGATIONS_DIR = Path(
+    os.getenv("INVESTIGATIONS_DIR", str(Path.home() / ".opensre" / "investigations"))
+)
 _AUTH_KEY = os.getenv("OPENSRE_API_KEY")
 _AUTH_EXEMPT_PATHS = {
     "/discord/interactions",
@@ -93,7 +97,14 @@ def _check_api_key(request: Request, x_api_key: str | None = Header(default=None
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    INVESTIGATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        INVESTIGATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"Cannot create investigations directory '{INVESTIGATIONS_DIR}'. "
+            "Set the INVESTIGATIONS_DIR environment variable to a writable path, "
+            f"or grant write access to '{INVESTIGATIONS_DIR.parent}'."
+        ) from exc
     _refresh_instance_metadata()
 
     poller_task: asyncio.Task[None] | None = None
@@ -413,39 +424,48 @@ async def investigate_stream(req: InvestigateRequest) -> Response:
 
     async def _event_generator() -> AsyncIterator[str]:
         try:
-            async for event in astream_investigation(
-                alert_name,
-                pipeline_name,
-                severity,
-                raw_alert=raw_alert,
-            ):
-                if event.kind == "on_chain_end":
-                    output = event.data.get("data", {}).get("output", {})
-                    if isinstance(output, dict):
-                        accumulated_state.update(output)
+            with track_investigation(
+                entrypoint=EntrypointSource.REMOTE_HTTP,
+                trigger_mode=TriggerMode.SERVICE_RUNTIME,
+            ) as tracker:
+                try:
+                    async for event in astream_investigation(
+                        alert_name,
+                        pipeline_name,
+                        severity,
+                        raw_alert=raw_alert,
+                    ):
+                        if event.kind == "on_chain_end":
+                            output = event.data.get("data", {}).get("output", {})
+                            if isinstance(output, dict):
+                                accumulated_state.update(output)
 
-                payload = _json.dumps(event.data, default=str)
-                yield f"event: {event.event_type}\ndata: {payload}\n\n"
-            yield "event: end\ndata: {}\n\n"
-        except Exception as exc:
-            try:
-                reraise_cli_runtime_error(exc)
-            except OpenSREError as mapped:
-                logger.warning(
-                    "Streaming investigation failed due to CLI runtime error: %s",
-                    mapped,
-                )
-                error_payload = {
-                    "detail": str(mapped),
-                    "suggestion": mapped.suggestion,
-                }
-                yield f"event: error\ndata: {_json.dumps(error_payload)}\n\n"
-                return
-            except Exception as inner_exc:
-                capture_exception(inner_exc)
-                logger.exception("Streaming investigation failed")
-                yield 'event: error\ndata: {"detail": "internal error"}\n\n'
-                return
+                        payload = _json.dumps(event.data, default=str)
+                        yield f"event: {event.event_type}\ndata: {payload}\n\n"
+                    yield "event: end\ndata: {}\n\n"
+                except Exception as exc:
+                    capture_investigation_failed(
+                        tracker=tracker,
+                        failure_type=type(exc).__name__,
+                    )
+                    try:
+                        reraise_cli_runtime_error(exc)
+                    except OpenSREError as mapped:
+                        logger.warning(
+                            "Streaming investigation failed due to CLI runtime error: %s",
+                            mapped,
+                        )
+                        error_payload = {
+                            "detail": str(mapped),
+                            "suggestion": mapped.suggestion,
+                        }
+                        yield f"event: error\ndata: {_json.dumps(error_payload)}\n\n"
+                        return
+                    except Exception as inner_exc:
+                        capture_exception(inner_exc)
+                        logger.exception("Streaming investigation failed")
+                        yield 'event: error\ndata: {"detail": "internal error"}\n\n'
+                        return
         finally:
             _persist_streamed_result(
                 alert_name=alert_name,
@@ -763,10 +783,14 @@ def _execute_investigation(
         pipeline_name=pipeline_name,
         severity=severity,
     )
-    result = run_investigation_cli(
-        raw_alert=raw_alert,
-        alert_name=resolved_alert_name,
-        pipeline_name=resolved_pipeline_name,
-        severity=resolved_severity,
-    )
+    with track_investigation(
+        entrypoint=EntrypointSource.REMOTE_HTTP,
+        trigger_mode=TriggerMode.SERVICE_RUNTIME,
+    ):
+        result = run_investigation_cli(
+            raw_alert=raw_alert,
+            alert_name=resolved_alert_name,
+            pipeline_name=resolved_pipeline_name,
+            severity=resolved_severity,
+        )
     return result, resolved_alert_name, resolved_pipeline_name, resolved_severity

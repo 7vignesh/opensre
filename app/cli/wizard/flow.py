@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.rule import Rule
 from rich.text import Text
 
-from app.cli.interactive_shell.theme import (
+from app.cli.interactive_shell.ui.theme import (
     BRAND,
     DIM,
     ERROR,
@@ -42,7 +42,9 @@ from app.llm_credentials import (
 )
 from app.version import get_version
 
-_console = Console(highlight=False, force_terminal=True, color_system="truecolor")
+_console = Console(
+    highlight=False, force_terminal=True, color_system="truecolor", legacy_windows=False
+)
 DEFAULT_GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
 DEFAULT_GITHUB_MCP_MODE = "streamable-http"
 DEFAULT_OPENCLAW_MCP_URL = "http://127.0.0.1:18789/"
@@ -440,7 +442,7 @@ def _render_header() -> None:
       ─────────────────────────────────────────  [DIM rule]
       Setup — Configure your local AI stack …    [SECONDARY subtitle]
     """
-    from app.cli.interactive_shell.banner import _render_art
+    from app.cli.interactive_shell.ui.banner import _render_art
 
     art = _render_art()
     version = get_version()
@@ -1052,7 +1054,7 @@ def _configure_openclaw() -> tuple[str, str]:
 
     while True:
         mode = _choose(
-            "Choose the OpenClaw MCP transport:",
+            "Choose the OpenClaw bridge transport:",
             [
                 Choice(value="stdio", label="stdio (recommended)"),
                 Choice(value="streamable-http", label="Streamable HTTP"),
@@ -1067,7 +1069,7 @@ def _configure_openclaw() -> tuple[str, str]:
         auth_token = ""
         if mode == "stdio":
             command = _prompt_value(
-                "OpenClaw MCP command",
+                "OpenClaw bridge command",
                 default=(
                     DEFAULT_OPENCLAW_MCP_COMMAND
                     if use_stdio_defaults
@@ -1075,7 +1077,7 @@ def _configure_openclaw() -> tuple[str, str]:
                 ),
             )
             args_raw = _prompt_value(
-                "OpenClaw MCP args",
+                "OpenClaw bridge args",
                 default=(
                     " ".join(DEFAULT_OPENCLAW_MCP_ARGS)
                     if use_stdio_defaults
@@ -1090,7 +1092,7 @@ def _configure_openclaw() -> tuple[str, str]:
             args = [part for part in args_raw.split() if part]
         else:
             url = _prompt_value(
-                "OpenClaw MCP URL",
+                "OpenClaw bridge URL",
                 default=_string_value(credentials.get("url"), DEFAULT_OPENCLAW_MCP_URL),
             )
             auth_token = _prompt_value(
@@ -1109,7 +1111,7 @@ def _configure_openclaw() -> tuple[str, str]:
             "args": args,
         }
 
-        with _console.status("Validating OpenClaw MCP integration...", spinner="dots"):
+        with _console.status("Validating OpenClaw bridge...", spinner="dots"):
             result = validate_openclaw_integration(
                 url=url,
                 mode=mode,
@@ -1135,6 +1137,16 @@ def _configure_openclaw() -> tuple[str, str]:
                     "OPENCLAW_MCP_COMMAND": command,
                     "OPENCLAW_MCP_ARGS": " ".join(args),
                 }
+            )
+            _console.print(f"[{HIGHLIGHT}]OpenClaw · ready[/]")
+            _console.print(
+                f"[{SECONDARY}]Verify:[/] [bold]uv run opensre integrations verify openclaw[/]"
+            )
+            _console.print(
+                f"[{SECONDARY}]Smoke test:[/] [bold]uv run opensre investigate -i tests/fixtures/openclaw_test_alert.json[/]"
+            )
+            _console.print(
+                f"[{SECONDARY}]Accurate RCA:[/] [bold]also configure Grafana/Datadog and GitHub[/]"
             )
             return "OpenClaw", str(env_path)
         default_mode = mode
@@ -1799,8 +1811,8 @@ def _configure_selected_integrations() -> tuple[list[str], str | None]:
         ),
         Choice(
             value="openclaw",
-            label="OpenClaw",
-            hint="Connect OpenSRE to OpenClaw so your AI coding assistant can trigger investigations",
+            label="OpenClaw (recommended)",
+            hint="Connect OpenSRE to OpenClaw for editor-driven RCA, setup checks, and write-back",
         ),
         Choice(value="splunk", label="Splunk", hint="Query logs from Splunk"),
         Choice(
@@ -2108,7 +2120,7 @@ def run_wizard(_argv: list[str] | None = None) -> int:
                 )
             ]
             model = provider.default_model
-            if provider.credential_kind != "cli":
+            if provider.credential_kind not in ("cli", "none"):
                 _step(provider.credential_label.title())
                 try:
                     api_key = _prompt_value(
@@ -2125,7 +2137,7 @@ def run_wizard(_argv: list[str] | None = None) -> int:
             assert saved_provider is not None
             provider = saved_provider
             model = saved_model_value or provider.default_model
-            if provider.credential_kind != "cli":
+            if provider.credential_kind not in ("cli", "none"):
                 has_api_key = bool(defaults["has_api_key"])
                 legacy_api_key = str(defaults["legacy_api_key"] or "").strip()
                 if not has_api_key and legacy_api_key:

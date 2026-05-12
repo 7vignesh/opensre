@@ -10,16 +10,15 @@ from rich.markup import escape
 
 from app.cli.interactive_shell.command_registry import repl_data
 from app.cli.interactive_shell.command_registry.types import ExecutionTier, SlashCommand
-from app.cli.interactive_shell.rendering import render_models_table
-from app.cli.interactive_shell.repl_choice_menu import (
+from app.cli.interactive_shell.runtime import ReplSession
+from app.cli.interactive_shell.ui import DIM, ERROR, HIGHLIGHT, WARNING, render_models_table
+from app.cli.interactive_shell.ui.choice_menu import (
     CRUMB_SEP,
     print_valid_choice_list,
     repl_choose_one,
     repl_section_break,
     repl_tty_interactive,
 )
-from app.cli.interactive_shell.session import ReplSession
-from app.cli.interactive_shell.theme import DIM, ERROR, HIGHLIGHT, WARNING
 
 _ROOT = "/model"  # breadcrumb root label
 
@@ -35,6 +34,10 @@ def _is_model_supported(
 ) -> bool:
     if provider_value == "ollama":
         # Ollama supports any local model name the daemon exposes.
+        return bool(model)
+    if provider_value == "bedrock":
+        # Bedrock supports any model ID, inference profile ID (us.*, eu.*, global.*),
+        # or application inference profile ARN the account has access to.
         return bool(model)
     supported_values = {str(getattr(option, "value", "")) for option in provider_models}
     return model in supported_values
@@ -234,6 +237,8 @@ def _reasoning_model_menu_choices(provider: object) -> list[tuple[str, str]]:
         value = str(getattr(option, "value", ""))
         display = value if value else "cli-default"
         choices.append((value, display))
+    if getattr(provider, "value", "") == "bedrock":
+        choices.append(("__custom__", "custom model / inference profile ID"))
     return choices
 
 
@@ -247,7 +252,23 @@ def _toolcall_model_menu_choices(provider: object) -> list[tuple[str, str]]:
         value = str(getattr(option, "value", ""))
         display = value if value else "cli-default"
         choices.append((value, display))
+    if getattr(provider, "value", "") == "bedrock":
+        choices.append(("__custom__", "custom model / inference profile ID"))
     return choices
+
+
+def _prompt_custom_model_id(console: Console) -> str | None:
+    """Prompt the user to type a custom Bedrock model/inference profile ID."""
+    console.print()
+    console.print(
+        f"[{DIM}]Enter a Bedrock model ID, inference profile ID (us.*/eu.*/global.*), "
+        f"or application inference profile ARN:[/]"
+    )
+    try:
+        value = console.input(f"[{HIGHLIGHT}]model ID> [/]").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    return value if value else None
 
 
 def _interactive_set_provider(console: Console) -> bool | None:
@@ -276,6 +297,12 @@ def _interactive_set_provider(console: Console) -> bool | None:
             if reasoning_choice is None:
                 break
 
+            if reasoning_choice == "__custom__":
+                custom = _prompt_custom_model_id(console)
+                if custom is None:
+                    continue
+                reasoning_choice = custom
+
             model_choice = (
                 None if reasoning_choice == "__provider_default__" else str(reasoning_choice)
             )
@@ -296,6 +323,12 @@ def _interactive_set_provider(console: Console) -> bool | None:
                         break
                     if toolcall_value == "__match_reasoning__":
                         toolcall_model = model_choice or provider.default_model
+                        break
+                    if toolcall_value == "__custom__":
+                        custom_tc = _prompt_custom_model_id(console)
+                        if custom_tc is None:
+                            continue
+                        toolcall_model = custom_tc
                         break
                     toolcall_model = str(toolcall_value)
                     break
@@ -352,6 +385,11 @@ def _interactive_set_toolcall(console: Console) -> bool | None:
     if model_value == "__match_reasoning__":
         reasoning = (os.getenv(provider.model_env, "") or "").strip() or provider.default_model
         return switch_toolcall_model(reasoning, console, provider_name=provider.value)
+    if model_value == "__custom__":
+        custom_tc = _prompt_custom_model_id(console)
+        if custom_tc is None:
+            return None
+        model_value = custom_tc
     return switch_toolcall_model(str(model_value), console, provider_name=provider.value)
 
 

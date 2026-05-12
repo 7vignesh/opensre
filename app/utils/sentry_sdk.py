@@ -44,6 +44,22 @@ _SENSITIVE_HEADERS: frozenset[str] = frozenset(
 _QUERY_SCRUBBING_CATEGORIES: frozenset[str] = frozenset({"http", "httpx"})
 _HEADER_SCRUBBING_CATEGORIES: frozenset[str] = frozenset({"http", "httpx", "aiohttp"})
 _HOSTED_ENTRYPOINTS: frozenset[str] = frozenset({"webapp", "remote", "mcp", "graph_pipeline"})
+_OPERATOR_ACTIONABLE_LLM_ERROR_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Any provider auth failure: "Openrouter authentication failed. Check OPENROUTER_API_KEY …"
+    re.compile(r"\bauthentication failed\.\s+Check\s+\S+_API_KEY\b", re.I),
+    re.compile(r"\bmissing\s+[A-Z0-9_]+_API_KEY\b", re.I),
+    # Pydantic validation: "LLM provider 'minimax' requires MINIMAX_API_KEY to be set."
+    re.compile(r"\brequires\s+[A-Z0-9_]+_API_KEY\s+to\s+be\s+set\b", re.I),
+    re.compile(r"\brate limit exceeded\b.*\b(?:quota|billing)\b", re.I),
+    re.compile(r"\bcredit balance is too low\b", re.I),
+    re.compile(r"\bmodel\s+['\"][^'\"]+['\"]\s+was not found\b", re.I),
+    re.compile(r"\bcheck your configured model name or endpoint\b", re.I),
+    # Relay/proxy forwarding an invalid model group to Anthropic.
+    re.compile(r"\bprovided model identifier is invalid\b", re.I),
+    re.compile(r"\bLLM API request failed after multiple retries\b", re.I),
+    # Provider endpoint unreachable (Ollama down, bad URL, SSL misconfiguration).
+    re.compile(r"\bcannot connect to .+ api\b", re.I),
+)
 
 
 class _ScopeTagsState:
@@ -190,16 +206,51 @@ def _scrub_event_in_place(event: dict[str, Any]) -> None:
                     _scrub_stacktrace_frames(frames)
 
 
+def _event_has_operator_actionable_llm_error(event: dict[str, Any]) -> bool:
+    """Return True for provider/account failures that users can fix outside OpenSRE.
+
+    These errors are still rendered to the CLI user, but they should not create
+    high-priority Sentry issues because they usually mean a bad key, exhausted
+    quota, missing local model, or temporary provider connectivity.
+    """
+    exception = event.get("exception")
+    if not isinstance(exception, dict):
+        return False
+
+    values = exception.get("values")
+    if not isinstance(values, list):
+        return False
+
+    combined_parts: list[str] = []
+    for entry in values:
+        if not isinstance(entry, dict):
+            continue
+        exc_type = entry.get("type")
+        exc_value = entry.get("value")
+        if isinstance(exc_type, str):
+            combined_parts.append(exc_type)
+        if isinstance(exc_value, str):
+            combined_parts.append(exc_value)
+
+    combined = "\n".join(combined_parts)
+    return any(pattern.search(combined) for pattern in _OPERATOR_ACTIONABLE_LLM_ERROR_PATTERNS)
+
+
 def _before_send(event: Any, _hint: dict[str, Any]) -> Any:
     """Drop or scrub a Sentry event before transport.
 
-    Returns ``None`` to drop the event (e.g. when DSN is empty), otherwise
-    returns the same dict with sensitive bits replaced with ``[Filtered]``.
+    Returns ``None`` to drop the event (e.g. when DSN is empty or telemetry
+    is disabled), otherwise returns the same dict with sensitive bits
+    replaced with ``[Filtered]``.
     """
+    if _is_sentry_disabled():
+        return None
     if not _resolved_dsn():
         return None
     if not isinstance(event, dict):
         return event
+    if _event_has_operator_actionable_llm_error(event):
+        return None
     try:
         _scrub_event_in_place(event)
     except Exception:
@@ -316,6 +367,8 @@ def _init_sentry_once(
     """
     import sentry_sdk
 
+    from app.integrations.llm_cli.errors import CLIAuthenticationRequired, CLITimeoutError
+
     with _suppress_langgraph_allowed_objects_warning():
         sentry_sdk.init(
             dsn=dsn,
@@ -330,6 +383,7 @@ def _init_sentry_once(
             integrations=_build_sentry_integrations(),
             before_send=_before_send,
             before_breadcrumb=_before_breadcrumb,
+            ignore_errors=[CLIAuthenticationRequired, CLITimeoutError],
         )
 
 

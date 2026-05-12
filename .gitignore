@@ -53,6 +53,7 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
+!tests/synthetic/hermes/**/*.log
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -132,6 +133,10 @@ tests/test_case_upstream_downstream_pipeline/pipeline_code/api_ingester/bin/
 **/cdk.out/
 
 CLAUDE_PERSONAL.md
+
+# Local planning notes (not tracked)
+plans/
+
 tasks/
 app/memories
 .aider*
@@ -140,3 +145,6 @@ app/memories
 # Node dev tooling
 node_modules/
 package-lock.json
+
+# Synthetic test run observations (generated test output, not source)
+tests/synthetic/rds_postgres/_observations/

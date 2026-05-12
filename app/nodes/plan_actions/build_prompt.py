@@ -1,5 +1,7 @@
 """Investigation prompt construction with available actions."""
 
+from typing import Any
+
 from pydantic import BaseModel, ValidationError
 
 from app.nodes.investigate.types import ExecutedHypothesis
@@ -14,6 +16,32 @@ def get_blocked_action_names(executed_hypotheses: list[ExecutedHypothesis]) -> s
             if isinstance(actions_list, list):
                 blocked_actions.update(action for action in actions_list if isinstance(action, str))
     return blocked_actions
+
+
+def _required_param_is_missing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
+
+
+def _has_resolved_required_params(action: Any, available_sources: dict[str, dict]) -> bool:
+    required = getattr(action, "requires", []) or []
+    if not required:
+        return True
+
+    try:
+        extracted = action.extract_params(available_sources)
+    except Exception:
+        return False
+
+    if not isinstance(extracted, dict):
+        return False
+
+    return all(not _required_param_is_missing(extracted.get(param_name)) for param_name in required)
 
 
 def _build_available_sources_hint(available_sources: dict[str, dict]) -> str:
@@ -94,10 +122,20 @@ def _build_available_sources_hint(available_sources: dict[str, dict]) -> str:
     if "grafana" in available_sources:
         grafana = available_sources["grafana"]
         loki_only = grafana.get("loki_only", False)
+        no_traces = grafana.get("no_traces", False)
         grafana_label = "Grafana Local (Loki only)" if loki_only else "Grafana Cloud"
-        traces_hint = (
-            "" if loki_only else "\n- Use query_grafana_traces to find distributed traces in Tempo"
-        )
+        # The traces action is hard-filtered out of available_actions when
+        # no_traces is set (see GrafanaTracesTool._query_grafana_traces_available),
+        # so the prompt only needs to describe traces when they are actually
+        # selectable. For loki_only stacks Tempo is also absent.
+        if loki_only or no_traces:
+            traces_hint = ""
+        else:
+            traces_hint = (
+                "\n- Use query_grafana_traces to find distributed traces in Tempo"
+                " — only relevant for request-latency or service-mesh incidents,"
+                " NOT for database resource threshold alerts (connections, CPU, storage)"
+            )
         hints.append(
             f"""{grafana_label} Available:
 - Service Name: {grafana.get("service_name")}
@@ -152,13 +190,25 @@ def _build_available_sources_hint(available_sources: dict[str, dict]) -> str:
     if available_sources.get("openclaw", {}).get("connection_verified"):
         openclaw = available_sources["openclaw"]
         endpoint = openclaw.get("openclaw_command") or openclaw.get("openclaw_url") or "unknown"
+        conversation_id = (
+            openclaw.get("openclaw_conversation_id") or openclaw.get("conversation_id") or "unknown"
+        )
+        conversation_hint = (
+            f"- Conversation ID: {conversation_id}\n"
+            "- Start with get_openclaw_conversation to read the full transcript tied to this incident\n"
+            if conversation_id != "unknown"
+            else "- Start with search_openclaw_conversations to find recent threads related to the alert or service\n"
+        )
         hints.append(
-            f"""OpenClaw MCP Available:
+            f"""OpenClaw Context Available:
 - Transport: {openclaw.get("openclaw_mode") or "unknown"}
 - Endpoint: {endpoint}
 - Search hint: {openclaw.get("openclaw_search_query") or "recent conversations"}
-- Start with search_openclaw_conversations to inspect recent OpenClaw context before generic tool calls
-- Use list_openclaw_tools only if you need to inspect the raw bridge surface"""
+- Known conversation available: {"yes" if conversation_id != "unknown" else "no"}
+{conversation_hint.rstrip()}
+- Use get_openclaw_conversation to read the full transcript of any relevant thread before generic bridge calls
+- Use send_openclaw_message only when you have a concrete update to append
+- Use list_openclaw_tools or call_openclaw_tool only if the native conversation actions are insufficient"""
         )
 
     if "vercel" in available_sources and "github" in available_sources:
@@ -433,6 +483,9 @@ Planning rules:
    - background processes (e.g. WAL, vacuum, or audit logging systems depending on the database engine)
    - storage growth sources such as audit logs (for PostgreSQL/Aurora) or other logging mechanisms
    Prefer actions that reveal these mechanisms when relevant signals (CPU, connections, storage) are elevated.
+11. Treat get_sre_guidance as a synthesis helper, not a primary evidence action:
+   - only select it after at least one telemetry action (metrics/logs/events/alerts) succeeds
+   - do not use it when concrete product telemetry actions are still available and untried
 
 When selecting actions, optimize for:
 - ruling out competing explanations
@@ -445,6 +498,7 @@ Additionally:
 - When connection counts are high, explicitly evaluate whether idle connections are contributing to the issue and include this explicitly in your reasoning if relevant.
 - When storage pressure is observed, explicitly consider audit logs or database-specific logging mechanisms (e.g. audit_log for PostgreSQL/Aurora)
 - For RDS/Postgres storage alerts, collect metrics, logs/events, and alert rules together when Grafana is available so the final RCA can connect FreeStorageSpace, WriteIOPS, RDS events, and the triggering alert.
+- For RDS/database resource threshold alerts (connections, CPU, storage, IOPS), when Grafana is available: prefer `query_grafana_alert_rules` over `query_grafana_traces`. Alert rules confirm the threshold configuration and the primary metric that fired, which directly anchors the RCA category. Distributed traces (Tempo) are only valuable when the incident is about request latency or service-mesh errors — they contain no useful data for infrastructure ceiling breaches. Do not select `query_grafana_traces` when the alert is clearly firing on a database resource metric.
 
 Avoid:
 - collecting general context that does not help separate hypotheses
@@ -490,7 +544,12 @@ def select_actions(
     Returns:
         Tuple of (available_actions, available_action_names)
     """
-    available_actions = [action for action in actions if action.is_available(available_sources)]
+    available_actions = [
+        action
+        for action in actions
+        if action.is_available(available_sources)
+        and _has_resolved_required_params(action, available_sources)
+    ]
 
     blocked_action_names = get_blocked_action_names(executed_hypotheses)
 

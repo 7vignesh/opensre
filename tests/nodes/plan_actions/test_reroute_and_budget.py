@@ -26,13 +26,25 @@ detect_sources_module = importlib.import_module("app.nodes.plan_actions.detect_s
 class MockAction:
     """Mock action for testing."""
 
-    def __init__(self, name: str, source: str = "test"):
+    def __init__(
+        self,
+        name: str,
+        source: str = "test",
+        *,
+        requires: list[str] | None = None,
+        extracted_params: dict[str, object] | None = None,
+    ):
         self.name = name
         self.source = source
         self.use_cases = [f"test_{name}"]
+        self.requires = requires or []
+        self._extracted_params = extracted_params or {}
 
     def is_available(self, _sources: dict) -> bool:
         return True
+
+    def extract_params(self, _sources: dict) -> dict[str, object]:
+        return dict(self._extracted_params)
 
 
 class MockPlan(BaseModel):
@@ -80,6 +92,44 @@ def test_select_actions_default_budget():
     available, names = select_actions(actions, available_sources, executed_hypotheses)
     assert len(available) == 10
     assert len(names) == 10
+
+
+def test_select_actions_skips_actions_with_unresolved_required_params():
+    actions = [
+        MockAction("search_openclaw_conversations", "openclaw"),
+        MockAction("call_openclaw_tool", "openclaw", requires=["tool_name"]),
+    ]
+
+    available, names = select_actions(
+        actions,
+        {"openclaw": {"connection_verified": True}},
+        [],
+        tool_budget=10,
+    )
+
+    assert [action.name for action in available] == ["search_openclaw_conversations"]
+    assert names == ["search_openclaw_conversations"]
+
+
+def test_select_actions_keeps_actions_when_required_params_are_resolved():
+    actions = [
+        MockAction(
+            "get_openclaw_conversation",
+            "openclaw",
+            requires=["conversation_id"],
+            extracted_params={"conversation_id": "conv-123"},
+        ),
+    ]
+
+    available, names = select_actions(
+        actions,
+        {"openclaw": {"connection_verified": True, "openclaw_conversation_id": "conv-123"}},
+        [],
+        tool_budget=10,
+    )
+
+    assert [action.name for action in available] == ["get_openclaw_conversation"]
+    assert names == ["get_openclaw_conversation"]
 
 
 def test_detect_reroute_trigger_s3_audit_discovery():
@@ -176,6 +226,25 @@ def test_seed_plan_actions_prepends_openclaw_search():
     assert seeded[1] == "query_datadog_logs"
 
 
+def test_seed_plan_actions_prefers_openclaw_conversation_detail_when_available():
+    seeded = _seed_plan_actions(
+        planned_actions=["search_openclaw_conversations", "query_datadog_logs"],
+        available_action_names=[
+            "get_openclaw_conversation",
+            "search_openclaw_conversations",
+            "query_datadog_logs",
+        ],
+        available_sources={
+            "openclaw": {
+                "connection_verified": True,
+                "openclaw_conversation_id": "conv-123",
+            }
+        },
+    )
+
+    assert seeded[0] == "get_openclaw_conversation"
+
+
 def test_seed_plan_actions_keeps_s3_audit_first():
     seeded = _seed_plan_actions(
         planned_actions=["query_datadog_logs"],
@@ -268,7 +337,10 @@ def test_ensure_seed_actions_available_inserts_openclaw_action():
 
     assert selected[0].name == "search_openclaw_conversations"
     assert names[0] == "search_openclaw_conversations"
-    assert selected[1].name == "list_openclaw_tools"
+    assert [action.name for action in selected] == [
+        "search_openclaw_conversations",
+        "query_datadog_logs",
+    ]
 
 
 def test_ensure_seed_actions_available_skips_previously_attempted_openclaw_actions():
@@ -283,7 +355,7 @@ def test_ensure_seed_actions_available_skips_previously_attempted_openclaw_actio
         tool_budget=5,
         executed_hypotheses=[
             {
-                "actions": ["search_openclaw_conversations", "list_openclaw_tools"],
+                "actions": ["search_openclaw_conversations"],
                 "loop_count": 0,
             }
         ],
@@ -360,7 +432,6 @@ def test_plan_actions_keeps_openclaw_seeded_when_budget_is_full(monkeypatch):
     assert plan is not None
     assert "openclaw" in available_sources
     assert available_action_names[0] == "search_openclaw_conversations"
-    assert available_action_names[1] == "list_openclaw_tools"
     assert available_actions[0].name == "search_openclaw_conversations"
     assert plan.actions[0] == "search_openclaw_conversations"
     assert rerouted is False
@@ -434,6 +505,78 @@ def test_plan_actions_keeps_deterministic_fallback_when_budget_is_full(monkeypat
     assert plan is not None
     assert available_action_names[0] == "get_sre_guidance"
     assert available_actions[0].name == "get_sre_guidance"
+
+
+def test_plan_actions_enforces_non_k8s_rds_topology_core_actions(monkeypatch):
+    actions = [
+        MockAction("describe_rds_instance", "rds"),
+        MockAction("ec2_instances_by_tag", "ec2"),
+        MockAction("get_elb_target_health", "ec2"),
+        MockAction("query_grafana_metrics", "grafana"),
+        MockAction("query_grafana_logs", "grafana"),
+        MockAction("query_grafana_alert_rules", "grafana"),
+        MockAction("describe_rds_events", "rds"),
+    ]
+
+    def _mock_detect_sources(raw_alert, context, resolved_integrations=None):
+        _ = (raw_alert, context, resolved_integrations)
+        return {
+            "rds": {"db_instance_identifier": "orders-prod"},
+            "ec2": {"vpc_id": "vpc-123", "target_group_arns": ["tg-1"], "_backend": object()},
+            "grafana": {"connection_verified": True},
+        }
+
+    def _mock_get_available_actions():
+        return actions
+
+    def _mock_get_prioritized_actions_with_reasons(sources=None, keywords=None):
+        _ = (sources, keywords)
+        return actions, []
+
+    def _mock_plan_actions_with_llm(**kwargs):
+        return kwargs["plan_model"](
+            actions=["query_grafana_alert_rules", "describe_rds_events"],
+            rationale="Mocked planner chose ancillary actions",
+        )
+
+    monkeypatch.setattr(plan_actions_module, "detect_sources", _mock_detect_sources)
+    monkeypatch.setattr(plan_actions_module, "get_available_actions", _mock_get_available_actions)
+    monkeypatch.setattr(
+        plan_actions_module,
+        "get_prioritized_actions_with_reasons",
+        _mock_get_prioritized_actions_with_reasons,
+    )
+    monkeypatch.setattr(plan_actions_module, "get_llm_for_tools", object)
+    monkeypatch.setattr(
+        plan_actions_module,
+        "plan_actions_with_llm",
+        _mock_plan_actions_with_llm,
+    )
+
+    input_data = InvestigateInput(
+        raw_alert={"alert_name": "RDS DBConnections climbing"},
+        context={},
+        problem_md="# RDS DBConnections climbing",
+        alert_name="RDSConnectionsClimbing",
+        executed_hypotheses=[],
+        tool_budget=10,
+    )
+
+    plan, *_ = plan_actions(
+        input_data=input_data,
+        plan_model=MockPlan,
+        resolved_integrations={"aws": {"ec2_backend": object()}},
+    )
+
+    assert plan is not None
+    assert plan.actions == [
+        "describe_rds_instance",
+        "ec2_instances_by_tag",
+        "get_elb_target_health",
+        "query_grafana_metrics",
+        "query_grafana_logs",
+    ]
+    assert "core non-K8s RDS attribution evidence" in plan.rationale
 
 
 def test_summarize_execution_results_tracks_retryable_failure_without_exhausting():

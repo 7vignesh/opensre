@@ -5,6 +5,7 @@ import collections
 import shutil
 import urllib.error
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -166,6 +167,46 @@ def test_investigate_captures_unexpected_exception(monkeypatch: pytest.MonkeyPat
     assert captured_errors == [expected_error]
 
 
+def test_execute_investigation_tracks_remote_http_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    track_calls: list[tuple[str, str]] = []
+
+    class _TrackContext:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            _ = (exc_type, exc, tb)
+            return False
+
+    def fake_track(*, entrypoint, trigger_mode, **kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        track_calls.append((entrypoint.value, trigger_mode.value))
+        return _TrackContext()
+
+    monkeypatch.setattr("app.remote.server.track_investigation", fake_track)
+    monkeypatch.setattr(
+        "app.cli.investigation.resolve_investigation_context",
+        lambda **_kwargs: ("alert-name", "pipeline-name", "critical"),
+    )
+    monkeypatch.setattr(
+        "app.cli.investigation.run_investigation_cli",
+        lambda **_kwargs: {"root_cause": "ok"},
+    )
+
+    result, alert_name, pipeline_name, severity = remote_server._execute_investigation(
+        raw_alert={"alert_name": "PayloadAlert"},
+        alert_name=None,
+        pipeline_name=None,
+        severity=None,
+    )
+
+    assert result == {"root_cause": "ok"}
+    assert (alert_name, pipeline_name, severity) == ("alert-name", "pipeline-name", "critical")
+    assert track_calls == [("remote_http", "service_runtime")]
+
+
 @pytest.mark.asyncio
 async def test_investigate_stream_persists_state_on_disconnect(
     monkeypatch: pytest.MonkeyPatch,
@@ -221,6 +262,7 @@ async def test_investigate_stream_captures_streaming_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_errors: list[BaseException] = []
+    captured_failures: list[str] = []
     expected_error = RuntimeError("stream failed")
 
     async def fake_astream_investigation(*args: object, **kwargs: object):
@@ -238,6 +280,14 @@ async def test_investigate_stream_captures_streaming_exception(
         fake_astream_investigation,
     )
     monkeypatch.setattr(remote_server, "capture_exception", captured_errors.append)
+    monkeypatch.setattr(
+        remote_server,
+        "capture_investigation_failed",
+        lambda *, tracker, failure_type=None: (
+            captured_failures.append(failure_type or ""),
+            tracker,
+        )[0],
+    )
     monkeypatch.setattr(remote_server, "_persist_streamed_result", lambda **_kwargs: None)
 
     response = await investigate_stream(
@@ -247,6 +297,7 @@ async def test_investigate_stream_captures_streaming_exception(
 
     assert any("event: error" in chunk for chunk in chunks)
     assert captured_errors == [expected_error]
+    assert captured_failures == ["RuntimeError"]
 
 
 @pytest.mark.asyncio
@@ -274,6 +325,22 @@ async def test_lifespan_starts_and_cancels_vercel_poller(
         await asyncio.wait_for(started.wait(), timeout=1)
 
     assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_raises_helpful_error_on_permission_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unwritable = MagicMock()
+    unwritable.mkdir.side_effect = PermissionError("Permission denied: '/opt/opensre'")
+    unwritable.__str__ = lambda _: "/opt/opensre/investigations"
+    unwritable.parent.__str__ = lambda _: "/opt/opensre"
+
+    monkeypatch.setattr(remote_server, "INVESTIGATIONS_DIR", unwritable)
+
+    with pytest.raises(RuntimeError, match="Cannot create investigations directory"):
+        async with _lifespan(object()):
+            pass
 
 
 # ---------------------------------------------------------------------------

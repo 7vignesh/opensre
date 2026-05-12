@@ -44,10 +44,12 @@ EvidenceSource = Literal[
     "opensearch",
     "alertmanager",
     "splunk",
+    "supabase",
     "airflow",
     "argocd",
     "helm",
     "victoria_logs",
     "rds",
     "ec2",
+    "hermes",
 ]

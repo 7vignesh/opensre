@@ -56,6 +56,7 @@ from app.integrations.registry import (
 )
 from app.integrations.sentry import build_sentry_config
 from app.integrations.store import _STRUCTURAL_RECORD_FIELDS, load_integrations
+from app.integrations.supabase import build_supabase_config
 from app.services.vercel import VercelConfig
 from app.utils.coercion import safe_int
 
@@ -484,7 +485,9 @@ def _classify_service_instance(
         except Exception:
             return None, None
         if openclaw_config.is_configured:
-            return openclaw_config.model_dump(), "openclaw"
+            config_dict = openclaw_config.model_dump()
+            config_dict["connection_verified"] = True
+            return config_dict, "openclaw"
         return None, None
 
     if key == "mysql":
@@ -800,6 +803,23 @@ def _classify_service_instance(
             return None, None
         if splunk_config.base_url and splunk_config.token:
             return splunk_config.model_dump(), "splunk"
+        return None, None
+
+    if key == "supabase":
+        try:
+            sb_config = build_supabase_config(
+                {
+                    "url": credentials.get("url", ""),
+                    "service_key": credentials.get("service_key", ""),
+                }
+            )
+        except Exception:
+            return None, None
+        if sb_config.is_configured:
+            return {
+                "project_url": sb_config.url,
+                "integration_id": record_id,
+            }, "supabase"
         return None, None
 
     # Fallback for unknown services: pass through credentials + record id.
@@ -1323,7 +1343,10 @@ def load_env_integrations() -> list[dict[str, Any]]:
             integrations.append(
                 _active_env_record(
                     "openclaw",
-                    openclaw_config.model_dump(exclude={"integration_id"}),
+                    {
+                        **openclaw_config.model_dump(exclude={"integration_id"}),
+                        "connection_verified": True,
+                    },
                 )
             )
         except Exception:
@@ -1617,6 +1640,22 @@ def load_env_integrations() -> list[dict[str, Any]]:
                 )
             )
 
+    supabase_url = os.getenv("SUPABASE_URL", "").strip()
+    supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+    if supabase_url and supabase_service_key:
+        try:
+            sb_config = build_supabase_config(
+                {"url": supabase_url, "service_key": supabase_service_key}
+            )
+            integrations.append(
+                _active_env_record(
+                    "supabase",
+                    {"project_url": sb_config.url},
+                )
+            )
+        except Exception:
+            logger.debug("Failed to load Supabase config from env", exc_info=True)
+
     return integrations
 
 
@@ -1859,4 +1898,12 @@ def resolve_effective_integrations(
                 },
             )
 
-    return EffectiveIntegrations.model_validate(effective).model_dump(exclude_none=True)
+    known_keys = set(EffectiveIntegrations.model_fields)
+    unknown_keys = set(effective) - known_keys
+    if unknown_keys:
+        logger.warning(
+            "resolve_effective_integrations: dropping unrecognised integration key(s): %s",
+            sorted(unknown_keys),
+        )
+    filtered_effective = {k: v for k, v in effective.items() if k in known_keys}
+    return EffectiveIntegrations.model_validate(filtered_effective).model_dump(exclude_none=True)

@@ -16,8 +16,11 @@ from app.agents.conflicts import (
     render_conflicts,
 )
 from app.agents.registry import AgentRecord, AgentRegistry
+from app.agents.tail import AttachUnsupported, TailBuffer
 from app.cli.interactive_shell.command_registry import SLASH_COMMANDS, dispatch_slash
-from app.cli.interactive_shell.session import ReplSession
+from app.cli.interactive_shell.command_registry import agents as agents_mod
+from app.cli.interactive_shell.command_registry.agents import _slice_to_utf8_boundary
+from app.cli.interactive_shell.runtime.session import ReplSession
 
 
 def _capture() -> tuple[Console, io.StringIO]:
@@ -33,9 +36,12 @@ def _isolate_registry(monkeypatch: pytest.MonkeyPatch, path: Path) -> AgentRegis
     """
     registry = AgentRegistry(path=path)
 
-    from app.cli.interactive_shell.command_registry import agents as agents_mod
-
     monkeypatch.setattr(agents_mod, "AgentRegistry", lambda: AgentRegistry(path=path))
+    monkeypatch.setattr(
+        agents_mod,
+        "registered_and_discovered_agents",
+        lambda _registry=None: AgentRegistry(path=path).list(),
+    )
     return registry
 
 
@@ -60,6 +66,17 @@ class TestAgentsRegistration:
         keywords = [pair[0] for pair in cmd.first_arg_completions]
         assert "conflicts" in keywords
 
+    def test_agents_first_arg_completions_include_trace(self) -> None:
+        cmd = SLASH_COMMANDS["/agents"]
+        keywords = [pair[0] for pair in cmd.first_arg_completions]
+        assert "trace" in keywords
+
+    def test_agents_first_arg_completions_include_wait_and_graph(self) -> None:
+        cmd = SLASH_COMMANDS["/agents"]
+        keywords = [pair[0] for pair in cmd.first_arg_completions]
+        assert "wait" in keywords
+        assert "graph" in keywords
+
     def test_default_window_constant_is_ten_seconds(self) -> None:
         assert DEFAULT_WINDOW_SECONDS == 10.0
 
@@ -82,7 +99,7 @@ class TestAgentsDispatch:
 
         out = buf.getvalue()
         # Caption from agents_view.render_agents_table:
-        assert "no agents registered" in out
+        assert "no agents discovered or registered" in out
         # Header row still rendered with the dashboard column structure:
         assert "agent" in out
         assert "pid" in out
@@ -104,6 +121,31 @@ class TestAgentsDispatch:
         assert "cursor-tab" in out
         assert "9133" in out
 
+    def test_no_subcommand_renders_discovered_agents(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.cli.interactive_shell.command_registry import agents as agents_mod
+
+        monkeypatch.setattr(
+            agents_mod,
+            "registered_and_discovered_agents",
+            lambda _registry=None: [
+                AgentRecord(
+                    name="cursor-claude-code",
+                    pid=80435,
+                    command="claude --output-format stream-json",
+                    source="discovered",
+                )
+            ],
+        )
+
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents", session, console) is True
+
+        out = buf.getvalue()
+        assert "cursor-claude-code" in out
+        assert "80435" in out
+        assert "discovered" in out
+
     def test_unknown_subcommand_prints_error(self) -> None:
         session = ReplSession()
         console, buf = _capture()
@@ -111,6 +153,16 @@ class TestAgentsDispatch:
         out = buf.getvalue()
         assert "unknown subcommand" in out.lower()
         assert "bogus" in out
+
+    def test_unknown_subcommand_message_lists_trace(self) -> None:
+        # When the user types a bogus subcommand the help string should
+        # advertise every supported one, including ``bus`` and ``trace``.
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents bogus", session, console) is True
+        out = buf.getvalue().lower()
+        assert "bus" in out
+        assert "trace" in out
 
     def test_dollar_hr_cell_reads_from_agents_yaml(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -303,3 +355,454 @@ class TestRenderConflicts:
         assert "/new.py" in out
         assert "/old.py" in out
         assert "aider:3" in out
+
+
+class _FakeSession:
+    """Minimal :class:`AttachSession` stand-in for slash-command tests.
+
+    Lets us drive ``_render_live_tail`` through ``dispatch_slash`` without
+    spawning a reader thread or touching the filesystem.
+    """
+
+    def __init__(
+        self,
+        chunks: list[bytes] | None = None,
+        *,
+        raise_ki: bool = False,
+        producer_exited: bool = False,
+    ) -> None:
+        self.buffer = TailBuffer()
+        self._chunks = list(chunks or [])
+        self._raise_ki = raise_ki
+        self.producer_exited = producer_exited
+        self.closed = False
+
+    def __iter__(self) -> _FakeSession:
+        return self
+
+    def __next__(self) -> bytes:
+        if self._raise_ki:
+            self._raise_ki = False  # raise once, like a real Ctrl+C
+            raise KeyboardInterrupt
+        if not self._chunks:
+            raise StopIteration
+        chunk = self._chunks.pop(0)
+        # Mirror :class:`AttachSession.__next__`: append-on-yield so the
+        # slash-command renderer only ever needs to read ``sess.buffer``.
+        self.buffer.append(chunk)
+        return chunk
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __enter__(self) -> _FakeSession:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+class TestSliceToUtf8Boundary:
+    """``_slice_to_utf8_boundary`` enforces the same chunk-edge guarantee
+    on the render side that :class:`TailBuffer` enforces on the consumer
+    side. Without it, the 64 KiB cap in ``_render_live_tail`` would slice
+    mid-codepoint and surface a U+FFFD at the top of the live view."""
+
+    def test_returns_input_when_under_cap(self) -> None:
+        data = b"\xf0\x9f\xa6\x80hello"
+        assert _slice_to_utf8_boundary(data, max_bytes=64) is data
+
+    def test_returns_input_when_exactly_at_cap(self) -> None:
+        data = b"X" * 64
+        assert _slice_to_utf8_boundary(data, max_bytes=64) is data
+
+    def test_walks_past_continuation_bytes_at_slice_start(self) -> None:
+        # 🦀 = b"\xf0\x9f\xa6\x80". Slicing at byte 2 of that codepoint
+        # would leave two stray continuation bytes (\xa6\x80) at the
+        # head; the boundary walk must skip them so the decoded string
+        # has no leading replacement character.
+        prefix = b"X" * 1000
+        data = prefix + b"\xf0\x9f\xa6\x80 done"
+        # max_bytes drops the first 998 bytes of prefix but keeps the
+        # last two ASCII bytes of prefix plus the partial 4-byte 🦀
+        # plus " done" — i.e. it lands inside the codepoint.
+        sliced = _slice_to_utf8_boundary(data, max_bytes=8)
+        # The decoded suffix must not start with U+FFFD.
+        decoded = sliced.decode("utf-8", errors="replace")
+        assert not decoded.startswith("�")
+        # And it must end with the trailing ASCII so we know we kept
+        # the suffix, not over-trimmed.
+        assert decoded.endswith(" done")
+
+    def test_drops_at_most_three_continuation_bytes(self) -> None:
+        # If for some reason the slice starts with more than 3
+        # continuation bytes (corrupt input), we don't loop forever.
+        # The bound is the max UTF-8 codepoint length (4 bytes).
+        bad = b"\x80\x80\x80\x80\x80hello"
+        sliced = _slice_to_utf8_boundary(bad, max_bytes=len(bad))
+        assert sliced is bad  # under cap, returned unchanged
+
+        sliced = _slice_to_utf8_boundary(b"prefix" + bad, max_bytes=len(bad))
+        # We walk forward at most 4 bytes; if all of those are still
+        # continuation bytes, decoding will surface U+FFFD — the helper
+        # is bounded, not magic.
+        assert len(sliced) >= len(bad) - 4
+
+    def test_pure_ascii_unchanged_after_slice(self) -> None:
+        data = b"abcdefghij"
+        sliced = _slice_to_utf8_boundary(data, max_bytes=5)
+        assert sliced == b"fghij"
+
+    def test_multibyte_decode_clean_after_slice(self) -> None:
+        # Snapshot ends with several 2-byte codepoints (é = b"\xc3\xa9");
+        # the slice must land on a leading byte so the decoded string
+        # has no leading replacement character.
+        prefix = b"a" * 100
+        data = prefix + b"\xc3\xa9\xc3\xa9\xc3\xa9"
+        sliced = _slice_to_utf8_boundary(data, max_bytes=5)
+        decoded = sliced.decode("utf-8", errors="replace")
+        assert "�" not in decoded
+
+
+class TestAgentsTrace:
+    def test_no_args_prints_usage(self) -> None:
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace", sess_obj, console) is True
+        out = buf.getvalue().lower()
+        assert "usage" in out
+        assert "<pid>" in out
+        assert sess_obj.history[-1]["ok"] is False
+
+    def test_non_numeric_pid_rejected(self) -> None:
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace abc", sess_obj, console) is True
+        out = buf.getvalue().lower()
+        assert "invalid pid" in out
+        assert sess_obj.history[-1]["ok"] is False
+
+    def test_too_many_args_rejected(self) -> None:
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace 1 2", sess_obj, console) is True
+        assert "usage" in buf.getvalue().lower()
+        assert sess_obj.history[-1]["ok"] is False
+
+    def test_attach_unsupported_renders_reason(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _refuse(_pid: int) -> _FakeSession:
+            raise AttachUnsupported("stdout is on a terminal; live tail not supported")
+
+        monkeypatch.setattr(agents_mod, "attach", _refuse)
+
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        out = buf.getvalue()
+        assert "cannot trace" in out
+        assert "stdout is on a terminal" in out
+        assert sess_obj.history[-1]["ok"] is False
+
+    def test_unknown_pid_falls_back_to_pid_label(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Header says "pid <n>" when the pid is not in the registry.
+        _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        monkeypatch.setattr(agents_mod, "attach", lambda _pid: _FakeSession(chunks=[]))
+
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        out = buf.getvalue()
+        assert "pid 8421" in out
+        assert "trace ended" in out
+
+    def test_known_pid_uses_registered_name_in_header(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        monkeypatch.setattr(agents_mod, "attach", lambda _pid: _FakeSession(chunks=[]))
+
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        out = buf.getvalue()
+        assert "claude-code" in out
+        assert "8421" in out
+
+    def test_renders_chunks_through_live(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Two chunks then StopIteration: the handler should append them
+        # to the buffer and feed Live.update; the rendered text should
+        # land in the captured console output.
+        monkeypatch.setattr(
+            agents_mod,
+            "attach",
+            lambda _pid: _FakeSession(chunks=[b"hello ", b"world\n"]),
+        )
+
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        out = buf.getvalue()
+        assert "hello world" in out
+        assert "trace ended" in out
+
+    def test_swallows_keyboard_interrupt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Single Ctrl+C inside the Live block must not propagate out of
+        # ``dispatch_slash`` — the REPL should return to its prompt.
+        # This is the kubectl-logs-style UX, deliberately different from
+        # ``stream_to_console``'s double-press pattern.
+        monkeypatch.setattr(agents_mod, "attach", lambda _pid: _FakeSession(raise_ki=True))
+
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        # Must not raise:
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        assert "trace ended" in buf.getvalue()
+
+    def test_session_is_closed_even_on_keyboard_interrupt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Lifecycle guard: the ``with`` block in the handler must close
+        # the AttachSession (and thereby the reader thread) regardless
+        # of whether the iteration completed naturally or was stopped
+        # by a Ctrl+C.
+        fake = _FakeSession(raise_ki=True)
+        monkeypatch.setattr(agents_mod, "attach", lambda _pid: fake)
+
+        sess_obj = ReplSession()
+        console, _ = _capture()
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        assert fake.closed is True
+
+    def test_renders_process_exited_when_producer_died(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # When the agent process dies during a trace, the trailer should
+        # surface that explicitly so an unattended trace doesn't look
+        # the same as a Ctrl+C abort.
+        monkeypatch.setattr(
+            agents_mod,
+            "attach",
+            lambda _pid: _FakeSession(chunks=[b"goodbye\n"], producer_exited=True),
+        )
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        out = buf.getvalue()
+        assert "process exited" in out
+        assert "trace ended" in out
+
+    def test_does_not_render_process_exited_on_user_stop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Producer is alive, user pressed Ctrl+C: only "trace ended"
+        # should appear; "process exited" would be misleading.
+        monkeypatch.setattr(
+            agents_mod,
+            "attach",
+            lambda _pid: _FakeSession(raise_ki=True, producer_exited=False),
+        )
+        sess_obj = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents trace 8421", sess_obj, console) is True
+        out = buf.getvalue()
+        assert "process exited" not in out
+        assert "trace ended" in out
+
+
+class TestAgentsWait:
+    def test_usage_when_missing_on_flag(self) -> None:
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents wait 1234 5678", session, console) is True
+        assert "usage:" in buf.getvalue().lower()
+
+    def test_rejects_non_numeric_pid(self) -> None:
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents wait abc --on 5678", session, console) is True
+        assert "invalid pid" in buf.getvalue().lower()
+
+    def test_rejects_non_numeric_on_pid(self) -> None:
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents wait 1234 --on xyz", session, console) is True
+        assert "invalid other-pid" in buf.getvalue().lower()
+
+    def test_rejects_self_wait(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents wait 1234 --on 1234", session, console) is True
+        assert "waiting for itself" in buf.getvalue()
+
+    def test_rejects_unknown_waiter(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents wait 9999 --on 8421", session, console) is True
+        assert "pid 9999 is not in the agent registry" in buf.getvalue()
+
+    def test_rejects_unknown_target(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="aider", pid=7702, command="aider"))
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents wait 7702 --on 9999", session, console) is True
+        assert "pid 9999 is not in the agent registry" in buf.getvalue()
+
+    def test_happy_path_persists_dependency(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # End-to-end: wait announces the edge in output AND survives a
+        # fresh AgentRegistry load (i.e. the rewrite step actually fired).
+        registry_path = tmp_path / "agents.jsonl"
+        registry = _isolate_registry(monkeypatch, registry_path)
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        registry.register(AgentRecord(name="aider", pid=7702, command="aider"))
+
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents wait 7702 --on 8421", session, console) is True
+        out = buf.getvalue()
+        assert "aider" in out
+        assert "claude-code" in out
+        assert "now waits on" in out
+
+        reloaded = AgentRegistry(path=registry_path).get(7702)
+        assert reloaded is not None
+        assert reloaded.waits_on == (8421,)
+
+    def test_repeated_wait_is_idempotent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Two wait calls with the same pair must not produce [8421, 8421].
+        # Guards against a regression where `add_waits_on`'s membership
+        # check is removed and duplicates leak into the JSONL.
+        registry_path = tmp_path / "agents.jsonl"
+        registry = _isolate_registry(monkeypatch, registry_path)
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        registry.register(AgentRecord(name="aider", pid=7702, command="aider"))
+
+        session = ReplSession()
+        for _ in range(2):
+            console, _ = _capture()
+            assert dispatch_slash("/agents wait 7702 --on 8421", session, console) is True
+
+        reloaded = AgentRegistry(path=registry_path).get(7702)
+        assert reloaded is not None
+        assert reloaded.waits_on == (8421,)
+
+
+class TestAgentsGraph:
+    def test_empty_registry_renders_empty_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents graph", session, console) is True
+        assert "no registered agents" in buf.getvalue()
+
+    def test_acyclic_chain_renders_all_agents(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The issue's example tree:
+        #   claude-code (8421) [active]
+        #   └── aider (7702) [waiting on claude-code]
+        #       └── cursor-tab (9133) [waiting on aider]
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        registry.register(AgentRecord(name="aider", pid=7702, command="aider", waits_on=(8421,)))
+        registry.register(
+            AgentRecord(name="cursor-tab", pid=9133, command="cursor", waits_on=(7702,))
+        )
+
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents graph", session, console) is True
+        out = buf.getvalue()
+        assert "claude-code" in out
+        assert "aider" in out
+        assert "cursor-tab" in out
+        assert "claude-code (8421) [active]" in out
+        assert "aider (7702) [waiting on claude-code]" in out
+        assert "cursor-tab (9133) [waiting on aider]" in out.lower()
+
+    def test_cycle_prints_warning(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="alpha", pid=1, command="a", waits_on=(2,)))
+        registry.register(AgentRecord(name="beta", pid=2, command="b", waits_on=(1,)))
+
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents graph", session, console) is True
+        out = buf.getvalue()
+
+        assert "agent dependency cycle detected" in out
+        assert "alpha" in out
+        assert "beta" in out
+        assert "alpha (1) -> beta (2) -> alpha (1)" in out
+
+    def test_acyclic_chain_multiple_roots(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        registry.register(AgentRecord(name="aider", pid=7702, command="aider", waits_on=(8421,)))
+        registry.register(AgentRecord(name="cursor-tab", pid=9133, command="cursor"))
+        registry.register(AgentRecord(name="aider", pid=8491, command="aider", waits_on=(9133,)))
+
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents graph", session, console) is True
+        out = buf.getvalue()
+        assert "cursor-tab (9133) [active]" in out
+        assert "claude-code (8421) [active]" in out
+        assert "aider (7702) [waiting on claude-code]" in out
+        assert "aider (8491) [waiting on cursor-tab]" in out
+
+    def test_acyclic_chain_multiple_blockers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        registry.register(AgentRecord(name="aider", pid=7702, command="aider", waits_on=(8421,)))
+        registry.register(
+            AgentRecord(name="cursor-tab", pid=9133, command="cursor", waits_on=(8421,))
+        )
+        registry.register(
+            AgentRecord(name="aider", pid=8491, command="aider", waits_on=(9133, 7702))
+        )
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents graph", session, console) is True
+        out = buf.getvalue()
+        assert "claude-code (8421) [active]" in out
+        assert "aider (8491) [waiting on aider]" in out
+        assert "aider (8491) [waiting on cursor-tab]" in out
+
+    def test_acyclic_chain_multiple_roots_blockers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = _isolate_registry(monkeypatch, tmp_path / "agents.jsonl")
+        registry.register(AgentRecord(name="claude-code", pid=8421, command="claude"))
+        registry.register(AgentRecord(name="cursor-tab", pid=9133, command="cursor"))
+        registry.register(
+            AgentRecord(name="aider", pid=7702, command="aider", waits_on=(8421, 9133))
+        )
+        registry.register(
+            AgentRecord(name="cursor-tab", pid=9134, command="cursor", waits_on=(9133, 8421))
+        )
+        registry.register(AgentRecord(name="aider", pid=8491, command="aider", waits_on=(9134,)))
+        session = ReplSession()
+        console, buf = _capture()
+        assert dispatch_slash("/agents graph", session, console) is True
+        out = buf.getvalue()
+        assert "claude-code (8421) [active]" in out
+        assert "cursor-tab (9133) [active]" in out
+        assert "cursor-tab (9134) [waiting on claude-code]" in out
+        assert "cursor-tab (9134) [waiting on cursor-tab]" in out
