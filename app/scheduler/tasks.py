@@ -92,10 +92,7 @@ def _build_incident_window_replay(task: ScheduledTask) -> str:
         return f"\U0001f504 Incident Window Replay ({task.window_hours}h)\n\nNo incidents found in window."
     except Exception as exc:
         logger.warning("[scheduler] pipeline failed for task %s: %s", task.id, exc)
-        return (
-            f"\U0001f504 Incident Window Replay ({task.window_hours}h)\n\n"
-            f"\u26a0\ufe0f Investigation failed: {exc}"
-        )
+        raise
 
 
 def _build_generic(task: ScheduledTask) -> str:
