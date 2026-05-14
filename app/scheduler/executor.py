@@ -87,14 +87,16 @@ def _resolve_credentials(task: ScheduledTask) -> dict[str, str]:
     """Resolve provider credentials from task params or integration store."""
     # First check task.params for explicit credentials
     if task.params.get("bot_token") or task.params.get("access_token"):
-        return dict(task.params)
+        return {k: str(v) for k, v in task.params.items()}
 
     # Fall back to the integration store
     from app.integrations.store import get_integration
 
     record = get_integration(task.provider)
     if record:
-        return record.get("credentials", {})
+        creds = record.get("credentials", {})
+        if isinstance(creds, dict):
+            return {k: str(v) for k, v in creds.items()}
     return {}
 
 
@@ -179,7 +181,7 @@ def _emit_analytics(
         event = event_map.get(phase)
         if event is None:
             return
-        props: dict[str, object] = {
+        props: dict[str, str | bool | int | float] = {
             "task_id": task.id,
             "task_kind": task.kind,
             "provider": task.provider,

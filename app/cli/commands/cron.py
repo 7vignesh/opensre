@@ -81,7 +81,7 @@ def add_command(
     Provider credentials are resolved from the integration store by default.
     Pass --token explicitly to override.
     """
-    from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
 
     # Validate cron expression by constructing the trigger
     parts = cron_expr.split()

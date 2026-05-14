@@ -7,8 +7,8 @@ import signal
 import sys
 from datetime import UTC, datetime
 
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.schedulers.blocking import BlockingScheduler  # type: ignore[import-untyped]
+from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
 
 from app.scheduler.executor import execute_task
 from app.scheduler.store import list_tasks, update_task
