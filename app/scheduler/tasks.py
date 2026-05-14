@@ -69,11 +69,7 @@ def _build_custom_investigation(task: ScheduledTask) -> str:
         return f"\U0001f50d Scheduled Investigation\nPrompt: {prompt}\n\nInvestigation completed — no actionable findings."
     except Exception as exc:
         logger.warning("[scheduler] pipeline failed for task %s: %s", task.id, exc)
-        return (
-            f"\U0001f50d Scheduled Investigation\n"
-            f"Prompt: {prompt}\n\n"
-            f"\u26a0\ufe0f Investigation failed: {exc}"
-        )
+        raise
 
 
 def _build_incident_window_replay(task: ScheduledTask) -> str:
