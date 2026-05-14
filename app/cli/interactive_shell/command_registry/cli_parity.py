@@ -214,6 +214,10 @@ def _cmd_hermes(session: ReplSession, console: Console, args: list[str]) -> bool
     return run_cli_command(console, ["hermes", *args])
 
 
+def _cmd_cron(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
+    return run_cli_command(console, ["cron", *args])
+
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand(
         "/onboard",
@@ -268,6 +272,12 @@ COMMANDS: list[SlashCommand] = [
         "/hermes",
         "live-tail Hermes logs and route incidents to Telegram ('/hermes watch')",
         _cmd_hermes,
+        execution_tier=ExecutionTier.SAFE,
+    ),
+    SlashCommand(
+        "/cron",
+        "manage scheduled recurring deliveries ('/cron list|add|remove|run|logs|start')",
+        _cmd_cron,
         execution_tier=ExecutionTier.SAFE,
     ),
 ]

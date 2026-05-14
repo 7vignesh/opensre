@@ -6,6 +6,7 @@ import click
 
 from app.cli.commands.agent import agents
 from app.cli.commands.config import config_command
+from app.cli.commands.cron import cron
 from app.cli.commands.doctor import doctor_command
 from app.cli.commands.general import (
     health_command,
@@ -32,6 +33,7 @@ _COMMANDS: tuple[click.Command, ...] = (
     guardrails,
     agents,
     messaging,
+    cron,
     hermes_command,
     health_command,
     doctor_command,
