@@ -63,7 +63,7 @@ def start_scheduler() -> None:
     for task in tasks:
         try:
             trigger = _make_trigger(task)
-        except ValueError as exc:
+        except (ValueError, KeyError) as exc:
             logger.warning("[scheduler] skipping task %s: %s", task.id, exc)
             continue
 
