@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from app.scheduler.claim_store import save_run, try_claim
 from app.scheduler.store import get_task, update_task
+from app.scheduler.tasks import build_message
 from app.scheduler.types import ScheduledTask, TaskRun, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ def execute_task(task_id: str, *, fire_time: str | None = None) -> TaskRun:
     start = time.monotonic()
 
     try:
-        message = _build_message(task)
+        message = build_message(task)
         posted, error, message_id = _deliver(task, message)
         if posted:
             run.status = TaskStatus.SUCCESS
@@ -72,43 +73,6 @@ def execute_task(task_id: str, *, fire_time: str | None = None) -> TaskRun:
         duration_ms,
     )
     return run
-
-
-# ---------------------------------------------------------------------------
-# Message building
-# ---------------------------------------------------------------------------
-
-
-def _build_message(task: ScheduledTask) -> str:
-    """Build the report message for a scheduled task."""
-    now = datetime.now(UTC)
-    window = task.window_hours
-    timestamp = now.strftime("%Y-%m-%d %H:%M UTC")
-
-    if task.kind == "daily_summary":
-        return (
-            f"\U0001f4ca Daily Reliability Summary\n"
-            f"Period: last {window}h (as of {timestamp})\n\n"
-            f"No active incidents detected. All systems nominal."
-        )
-    if task.kind == "weekly_audit":
-        return (
-            f"\U0001f4cb Weekly Noisy-Alert Audit\n"
-            f"Period: last {window}h (as of {timestamp})\n\n"
-            f"No noisy alerts flagged this period."
-        )
-    if task.kind == "synthetic_run":
-        return (
-            f"\U0001f9ea Synthetic Test Summary\n"
-            f"Period: last {window}h (as of {timestamp})\n\n"
-            f"All synthetic checks passed."
-        )
-    prompt = task.params.get("prompt", "System health check")
-    return (
-        f"\U0001f50d Scheduled Investigation\n"
-        f"Prompt: {prompt}\n"
-        f"Window: {window}h (as of {timestamp})"
-    )
 
 
 # ---------------------------------------------------------------------------
