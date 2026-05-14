@@ -36,7 +36,10 @@ def _make_trigger(task: ScheduledTask) -> CronTrigger:
 def _job_wrapper(task_id: str) -> None:
     """Wrapper called by APScheduler for each tick.
 
-    Uses the current time as fire_time for claim-based dedup.
+    The fire_time is truncated to the minute so all instances processing
+    the same cron tick converge on the same claim key. APScheduler fires
+    jobs within seconds of the scheduled time, so minute-level granularity
+    is sufficient for dedup.
     """
     fire_time = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M")
     execute_task(task_id, fire_time=fire_time)

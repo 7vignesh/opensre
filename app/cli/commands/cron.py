@@ -61,6 +61,12 @@ def list_command() -> None:
 @click.option("--provider", "-p", type=click.Choice(_PROVIDER_CHOICES), required=True)
 @click.option("--chat-id", required=True, help="Target chat/channel ID")
 @click.option("--window", "window_hours", type=int, default=24, help="Lookback window in hours")
+@click.option(
+    "--token",
+    "token",
+    default=None,
+    help="Provider bot/access token (reads from integration store if omitted)",
+)
 def add_command(
     kind: str,
     cron_expr: str,
@@ -68,13 +74,40 @@ def add_command(
     provider: str,
     chat_id: str,
     window_hours: int,
+    token: str | None,
 ) -> None:
-    """Add a new scheduled task."""
-    # Validate cron expression
+    """Add a new scheduled task.
+
+    Provider credentials are resolved from the integration store by default.
+    Pass --token explicitly to override.
+    """
+    from apscheduler.triggers.cron import CronTrigger
+
+    # Validate cron expression by constructing the trigger
     parts = cron_expr.split()
     if len(parts) != 5:
         _console.print("[red]Error: cron expression must have exactly 5 fields.[/red]")
         raise SystemExit(1)
+    try:
+        minute, hour, day, month, day_of_week = parts
+        CronTrigger(
+            minute=minute,
+            hour=hour,
+            day=day,
+            month=month,
+            day_of_week=day_of_week,
+            timezone=timezone,
+        )
+    except (ValueError, TypeError) as exc:
+        _console.print(f"[red]Error: invalid cron expression — {exc}[/red]")
+        raise SystemExit(1) from None
+
+    # Build params with credentials
+    params: dict[str, str] = {}
+    if token:
+        # Store under the key the executor expects
+        key = "access_token" if provider == "slack" else "bot_token"
+        params[key] = token
 
     task = ScheduledTask(
         kind=TaskKind(kind),
@@ -83,11 +116,14 @@ def add_command(
         provider=provider,
         chat_id=chat_id,
         window_hours=window_hours,
+        params=params,
     )
     add_task(task)
+    creds_source = "explicit --token" if token else "integration store (auto-resolved at runtime)"
     _console.print(f"[green]Task {task.id} created.[/green]")
     _console.print(f"  Kind: {task.kind}  Cron: {task.cron}  TZ: {task.timezone}")
     _console.print(f"  Provider: {task.provider}  Chat: {task.chat_id}")
+    _console.print(f"  Credentials: {creds_source}")
 
 
 @cron.command("remove")
