@@ -71,5 +71,6 @@ class Event(StrEnum):
     AGENT_KILL_FAILED = "agent_kill_failed"
 
     # Scheduled deliveries
+    SCHEDULED_TASK_STARTED = "scheduled_task_started"
     SCHEDULED_TASK_COMPLETED = "scheduled_task_completed"
     SCHEDULED_TASK_FAILED = "scheduled_task_failed"
