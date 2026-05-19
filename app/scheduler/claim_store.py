@@ -6,15 +6,12 @@ multiple scheduler instances race for the same tick.
 
 from __future__ import annotations
 
-import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 from app.constants import OPENSRE_HOME_DIR
 from app.scheduler.types import TaskRun, TaskStatus
-
-logger = logging.getLogger(__name__)
 
 _DB_FILENAME = "scheduler.db"
 

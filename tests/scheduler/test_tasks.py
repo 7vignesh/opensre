@@ -51,21 +51,14 @@ class TestMessageBuilders:
             provider=Provider.TELEGRAM,
             chat_id="-100",
         )
-        # Mock the pipeline import to raise
-        monkeypatch.setattr(
-            "app.scheduler.tasks.build_message",
-            build_message,
-        )
-        # Patch the import inside the function
         import app.scheduler.tasks as tasks_mod
 
-        def _mock_build_replay(t: ScheduledTask) -> str:
+        def _mock_build_replay(_t: ScheduledTask) -> str:
             raise RuntimeError("Pipeline failed")
 
         monkeypatch.setattr(tasks_mod, "_build_incident_window_replay", _mock_build_replay)
 
         with pytest.raises(RuntimeError, match="Pipeline failed"):
-            # Call the internal builder directly
             tasks_mod._build_incident_window_replay(task)
 
     def test_custom_investigation_pipeline_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,10 +70,38 @@ class TestMessageBuilders:
         )
         import app.scheduler.tasks as tasks_mod
 
-        def _mock_build_custom(t: ScheduledTask) -> str:
+        def _mock_build_custom(_t: ScheduledTask) -> str:
             raise RuntimeError("Custom investigation failed")
 
         monkeypatch.setattr(tasks_mod, "_build_custom_investigation", _mock_build_custom)
 
         with pytest.raises(RuntimeError, match="Custom investigation failed"):
             tasks_mod._build_custom_investigation(task)
+
+    def test_custom_investigation_strips_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify credential keys are not passed to the investigation pipeline."""
+        task = ScheduledTask(
+            kind=TaskKind.CUSTOM_INVESTIGATION,
+            cron="0 9 * * *",
+            provider=Provider.TELEGRAM,
+            chat_id="-100",
+            params={"bot_token": "secret123", "custom_param": "safe_value"},
+        )
+
+        captured_payload: dict[str, object] = {}
+
+        def _mock_run_investigation(payload: object, **_kwargs: object) -> dict[str, str]:
+            captured_payload.update(payload)  # type: ignore[arg-type]
+            return {"report": "test report"}
+
+        monkeypatch.setattr(
+            "app.pipeline.runners.run_investigation",
+            _mock_run_investigation,
+        )
+
+        # Call the builder directly — it imports run_investigation lazily
+        import app.scheduler.tasks as tasks_mod
+
+        tasks_mod._build_custom_investigation(task)
+        assert "bot_token" not in captured_payload
+        assert captured_payload.get("custom_param") == "safe_value"

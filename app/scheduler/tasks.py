@@ -13,6 +13,9 @@ from app.scheduler.types import ScheduledTask, TaskKind
 
 logger = logging.getLogger(__name__)
 
+# Keys that should never be forwarded to the investigation pipeline
+_CREDENTIAL_KEYS = frozenset({"bot_token", "access_token", "api_key", "webhook_url", "secret"})
+
 
 def build_message(task: ScheduledTask) -> str:
     """Build the report message for a scheduled task based on its kind.
@@ -115,12 +118,14 @@ def _build_custom_investigation(task: ScheduledTask) -> str:
     try:
         from app.pipeline.runners import run_investigation
 
+        # Strip credential keys before passing params to the pipeline
+        safe_params = {k: v for k, v in task.params.items() if k not in _CREDENTIAL_KEYS}
         alert_payload = {
             "source": "scheduled_custom",
             "task_id": task.id,
             "window_hours": task.window_hours,
             "kind": task.kind.value,
-            **task.params,
+            **safe_params,
         }
         result = run_investigation(alert_payload)
         if result and result.get("report"):

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.scheduler.runner import _make_trigger, run_task_now
+from app.scheduler.runner import _compute_fire_time, _make_trigger, run_task_now
 from app.scheduler.types import Provider, ScheduledTask, TaskKind
 
 
@@ -62,6 +62,30 @@ class TestMakeTrigger:
         assert trigger is not None
 
 
+class TestComputeFireTime:
+    def test_with_utc_datetime(self) -> None:
+        from datetime import UTC, datetime
+
+        dt = datetime(2026, 1, 15, 9, 0, tzinfo=UTC)
+        result = _compute_fire_time(dt)
+        assert result == "2026-01-15T09:00Z"
+
+    def test_with_non_utc_datetime(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        # UTC+5:30
+        tz = timezone(timedelta(hours=5, minutes=30))
+        dt = datetime(2026, 1, 15, 14, 30, tzinfo=tz)
+        result = _compute_fire_time(dt)
+        # 14:30 IST = 09:00 UTC
+        assert result == "2026-01-15T09:00Z"
+
+    def test_with_none_falls_back_to_utc_now(self) -> None:
+        result = _compute_fire_time(None)
+        assert result.endswith("Z")
+        assert "T" in result
+
+
 class TestRunTaskNow:
     def test_nonexistent_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
@@ -86,9 +110,10 @@ class TestRunTaskNow:
 
         assert result is True
         mock_exec.assert_called_once()
-        # Verify fire_time has seconds (ad-hoc format)
+        # Verify fire_time has seconds (ad-hoc format) and ends with Z
         call_args = mock_exec.call_args
         fire_time = call_args[0][1]
+        assert fire_time.endswith("Z")
         assert "T" in fire_time
         # Ad-hoc runs use second-precision to avoid colliding with scheduled runs
-        assert len(fire_time.split("T")[1].split(":")) == 3
+        assert len(fire_time.split("T")[1].rstrip("Z").split(":")) == 3

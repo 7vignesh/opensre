@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from app.scheduler.claim_store import complete_run, try_claim
 from app.scheduler.credentials import (
@@ -15,6 +16,12 @@ from app.scheduler.types import Provider, ScheduledTask, TaskStatus
 
 logger = logging.getLogger(__name__)
 
+# Keys that should never be forwarded to the investigation pipeline
+_CREDENTIAL_KEYS = frozenset({"bot_token", "access_token", "api_key", "webhook_url", "secret"})
+
+# Strip HTML tags for providers that don't support them
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
 
 def execute_task(
     task: ScheduledTask,
@@ -24,7 +31,7 @@ def execute_task(
 
     Args:
         task: The scheduled task definition.
-        fire_time: The canonical fire time string (minute-precision) from the
+        fire_time: The canonical fire time string (UTC, minute-precision) from the
             scheduler trigger, used as the dedup key.
 
     Returns:
@@ -41,6 +48,7 @@ def execute_task(
         return False
 
     logger.info("Executing task %s (kind=%s, fire_time=%s)", task.id, task.kind, fire_time)
+    _emit_analytics_started(task)
 
     # Build the message
     try:
@@ -90,6 +98,11 @@ def _deliver(
         return False, f"Unsupported provider: {task.provider}", ""
 
 
+def _strip_html(text: str) -> str:
+    """Strip HTML tags for providers that use plain text or Markdown."""
+    return _HTML_TAG_RE.sub("", text)
+
+
 def _deliver_telegram(task: ScheduledTask, message: str) -> tuple[bool, str, str]:
     """Deliver via Telegram using the truncation helper then posting directly.
 
@@ -119,6 +132,9 @@ def _deliver_slack(task: ScheduledTask, message: str) -> tuple[bool, str, str]:
     creds = resolve_slack_credentials(task.params)
     access_token = creds.get("access_token", "")
 
+    # Strip HTML tags — Slack uses mrkdwn, not HTML
+    plain_message = _strip_html(message)
+
     if access_token and task.chat_id:
         # Direct API post as a new top-level message
         from app.utils.delivery_transport import post_json
@@ -129,7 +145,7 @@ def _deliver_slack(task: ScheduledTask, message: str) -> tuple[bool, str, str]:
         }
         payload = {
             "channel": task.chat_id,
-            "text": message,
+            "text": plain_message,
         }
         response = post_json(
             url="https://slack.com/api/chat.postMessage",
@@ -138,17 +154,23 @@ def _deliver_slack(task: ScheduledTask, message: str) -> tuple[bool, str, str]:
         )
         if not response.ok:
             return False, f"Slack API error: {response.error}", ""
+        if not 200 <= response.status_code < 300:
+            error_text = response.text[:200] if response.text else f"HTTP {response.status_code}"
+            return False, f"Slack HTTP error: {error_text}", ""
         if response.data.get("ok") is not True:
             error = response.data.get("error", "unknown")
             return False, f"Slack error: {error}", ""
         msg_ts = str(response.data.get("ts", ""))
         return True, "", msg_ts
 
-    # Fall back to webhook
-    from app.utils.slack_delivery import send_slack_report
-
-    ok, error = send_slack_report(message)
-    return ok, error, ""
+    # No access_token — cannot deliver to the configured chat_id
+    if not task.chat_id:
+        return False, "Missing chat_id for Slack delivery", ""
+    return (
+        False,
+        "Missing access_token for Slack delivery (webhook cannot target specific channels)",
+        "",
+    )
 
 
 def _deliver_discord(task: ScheduledTask, message: str) -> tuple[bool, str, str]:
@@ -160,12 +182,15 @@ def _deliver_discord(task: ScheduledTask, message: str) -> tuple[bool, str, str]
 
     from app.utils.discord_delivery import send_discord_report
 
+    # Strip HTML tags — Discord uses embeds, not HTML
+    plain_message = _strip_html(message)
+
     discord_ctx = {
         "channel_id": task.chat_id,
         "bot_token": bot_token,
         # No thread_id — scheduled deliveries post to the channel directly
     }
-    ok, error = send_discord_report(message, discord_ctx)
+    ok, error = send_discord_report(plain_message, discord_ctx)
     return ok, error, ""
 
 
@@ -182,8 +207,24 @@ def _record_failure(task: ScheduledTask, fire_time: str, error: str) -> None:
     logger.warning("Task %s failed: %s", task.id, error)
 
 
+def _emit_analytics_started(task: ScheduledTask) -> None:
+    """Emit SCHEDULED_TASK_STARTED event after a claim is won."""
+    try:
+        from app.analytics.events import Event
+        from app.analytics.provider import Properties, get_analytics
+
+        properties: Properties = {
+            "task_id": task.id,
+            "task_kind": task.kind.value,
+            "provider": task.provider.value,
+        }
+        get_analytics().capture(Event.SCHEDULED_TASK_STARTED, properties)
+    except Exception:
+        logger.debug("Failed to emit analytics for task %s", task.id, exc_info=True)
+
+
 def _emit_analytics(task: ScheduledTask, status: TaskStatus, error: str = "") -> None:
-    """Emit analytics event for task execution."""
+    """Emit analytics event for task execution completion."""
     try:
         from app.analytics.events import Event
         from app.analytics.provider import Properties, get_analytics
