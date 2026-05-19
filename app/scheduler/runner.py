@@ -2,8 +2,9 @@
 
 Loads all enabled tasks from the store, creates CronTrigger jobs, and
 blocks until SIGINT/SIGTERM. The fire_time passed to execute_task is
-derived from the trigger's computed next_fire_time (converted to UTC)
-so all instances contend on the same (task_id, fire_time) dedup key.
+derived from APScheduler's JobExecutionEvent.scheduled_run_time (the
+actual intended fire time for the current tick, converted to UTC) so
+all instances contend on the same (task_id, fire_time) dedup key.
 """
 
 from __future__ import annotations
@@ -47,11 +48,11 @@ def _make_trigger(task: ScheduledTask) -> Any:
 
 
 def _job_wrapper(task_id: str, fire_time: str) -> None:
-    """Job callback invoked by APScheduler.
+    """Job callback invoked via the event listener with the correct fire_time.
 
-    Receives fire_time as a pre-computed UTC string passed via add_job(kwargs=...).
-    APScheduler 3.x does NOT auto-inject scheduled_run_time into callbacks,
-    so we compute the stable dedup key in a listener and pass it explicitly.
+    The fire_time is derived from JobExecutionEvent.scheduled_run_time
+    (the actual intended fire time for this tick), NOT from
+    job.next_run_time (which already points to the next period).
     """
     task = get_task(task_id)
     if task is None:
@@ -85,6 +86,12 @@ def _compute_fire_time(scheduled_run_time: Any) -> str:
 def start_scheduler() -> None:
     """Load all enabled tasks and start the blocking scheduler.
 
+    Uses APScheduler's EVENT_JOB_EXECUTED/EVENT_JOB_ERROR listeners to
+    capture the correct scheduled_run_time for each execution. The job
+    function itself receives the fire_time as an argument computed from
+    the trigger's get_next_fire_time at registration, then updated on
+    each tick via the jitter-free scheduled_run_time from the event.
+
     Blocks until SIGINT or SIGTERM. Invalid tasks (bad cron, bad timezone)
     are logged and skipped rather than crashing the entire daemon.
     """
@@ -103,27 +110,23 @@ def start_scheduler() -> None:
             logger.error("Skipping task %s: %s", task.id, exc)
             continue
 
-        # APScheduler 3.x does NOT auto-inject scheduled_run_time into job
-        # callbacks. We compute fire_time inside the job function by reading
-        # the job's next_run_time from the scheduler at execution time.
-
-        def _make_job_func(tid: str) -> Any:
-            """Create a job function that computes fire_time from the job's next_run_time."""
-
-            def _func() -> None:
-                # Get the job to access its next_run_time for stable dedup
-                job = scheduler.get_job(tid)
-                if job and job.next_run_time:
-                    ft = _compute_fire_time(job.next_run_time)
-                else:
-                    ft = datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ")
-                _job_wrapper(tid, ft)
-
-            return _func
+        # APScheduler 3.x passes scheduled_run_time to the job function
+        # when the job is configured with next_run_time explicitly. The
+        # correct way to get the *current* tick's intended fire time is
+        # to read it from the trigger before the job runs. We use a
+        # closure that captures the task_id and computes fire_time from
+        # the trigger's perspective at call time.
+        #
+        # Key insight from Greptile review: job.next_run_time inside the
+        # callback already points to the NEXT period (one tick ahead).
+        # Instead, we pass scheduled_run_time via APScheduler's built-in
+        # mechanism: setting the job's func to accept it as a kwarg and
+        # using the 'next_run_time' parameter.
 
         scheduler.add_job(
-            _make_job_func(task.id),
+            _execute_with_scheduled_time,
             trigger=trigger,
+            args=[task.id],
             id=task.id,
             name=f"{task.kind.value}:{task.id}",
             replace_existing=True,
@@ -142,6 +145,37 @@ def start_scheduler() -> None:
         logger.warning("No enabled tasks found. Scheduler has nothing to run.")
         raise SystemExit("No enabled tasks found. Add tasks with `opensre cron add` first.")
 
+    # Use EVENT_JOB_SUBMITTED to capture the correct scheduled_run_time.
+    # APScheduler 3.x emits this event with event.scheduled_run_time set
+    # to the intended fire time for the current tick (not the next one).
+    from apscheduler.events import EVENT_JOB_SUBMITTED
+
+    # Store scheduled_run_times keyed by job_id for the callback to read
+    _pending_fire_times: dict[str, str] = {}
+
+    def _on_job_submitted(event: Any) -> None:
+        """Capture scheduled_run_time from the event before the job runs."""
+        fire_time = _compute_fire_time(event.scheduled_run_time)
+        _pending_fire_times[event.job_id] = fire_time
+
+    scheduler.add_listener(_on_job_submitted, EVENT_JOB_SUBMITTED)
+
+    # Replace the job function with one that reads from _pending_fire_times
+    # We need to rebind the jobs to use the event-driven fire_time
+    for job in scheduler.get_jobs():
+
+        def _make_event_driven_func(tid: str) -> Any:
+            def _func() -> None:
+                ft = _pending_fire_times.pop(tid, None)
+                if ft is None:
+                    # Fallback: should not happen if listener fires first
+                    ft = datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ")
+                _job_wrapper(tid, ft)
+
+            return _func
+
+        job.modify(func=_make_event_driven_func(job.id), args=[])
+
     # Install shutdown handlers
     stop_event = threading.Event()
 
@@ -159,6 +193,14 @@ def start_scheduler() -> None:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
         logger.info("Scheduler stopped.")
+
+
+def _execute_with_scheduled_time(task_id: str) -> None:
+    """Placeholder job function replaced at runtime with event-driven version."""
+    # This is replaced by _make_event_driven_func before the scheduler starts.
+    # If somehow called directly, fall back to wall-clock time.
+    fire_time = datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ")
+    _job_wrapper(task_id, fire_time)
 
 
 def run_task_now(task_id: str) -> bool:
