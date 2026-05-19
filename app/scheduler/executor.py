@@ -16,9 +16,6 @@ from app.scheduler.types import Provider, ScheduledTask, TaskStatus
 
 logger = logging.getLogger(__name__)
 
-# Keys that should never be forwarded to the investigation pipeline
-_CREDENTIAL_KEYS = frozenset({"bot_token", "access_token", "api_key", "webhook_url", "secret"})
-
 # Strip HTML tags for providers that don't support them
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 

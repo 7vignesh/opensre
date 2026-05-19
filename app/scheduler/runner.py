@@ -155,7 +155,13 @@ def start_scheduler() -> None:
 
     def _on_job_submitted(event: Any) -> None:
         """Capture scheduled_run_time from the event before the job runs."""
-        fire_time = _compute_fire_time(event.scheduled_run_time)
+        # APScheduler 3.x JobSubmissionEvent exposes scheduled_run_times
+        # (a list[datetime]), not scheduled_run_time (singular).
+        run_times = getattr(event, "scheduled_run_times", None)
+        if run_times:
+            fire_time = _compute_fire_time(run_times[0])
+        else:
+            fire_time = datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ")
         _pending_fire_times[event.job_id] = fire_time
 
     scheduler.add_listener(_on_job_submitted, EVENT_JOB_SUBMITTED)
