@@ -230,6 +230,10 @@ def _cmd_hermes(session: ReplSession, console: Console, args: list[str]) -> bool
     return run_cli_command(console, ["hermes", *args])
 
 
+def _cmd_cron(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
+    return run_cli_command(console, ["cron", *args])
+
+
 def _cmd_watchdog(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
     return run_cli_command(console, ["watchdog", *args])
 
@@ -311,6 +315,13 @@ COMMANDS: list[SlashCommand] = [
         "Live-tail Hermes logs and route incidents to Telegram.",
         _cmd_hermes,
         usage=("/hermes watch",),
+        execution_tier=ExecutionTier.SAFE,
+    ),
+    SlashCommand(
+        "/cron",
+        "Manage cron-driven scheduled deliveries.",
+        _cmd_cron,
+        usage=("/cron list", "/cron add", "/cron remove <id>", "/cron run <id>", "/cron logs <id>"),
         execution_tier=ExecutionTier.SAFE,
     ),
     SlashCommand(

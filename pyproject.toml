@@ -66,6 +66,8 @@ dependencies = [
     # File locking for atomic store operations
     "filelock>=3.29.0",
     "psutil>=5.9",
+    # Scheduler for cron-driven deliveries
+    "APScheduler>=3.10.0,<4.0.0",
 ]
 
 [project.urls]
