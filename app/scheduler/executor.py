@@ -165,7 +165,7 @@ def _deliver_slack(task: ScheduledTask, message: str) -> tuple[bool, str, str]:
         return False, "Missing chat_id for Slack delivery", ""
     return (
         False,
-        "Missing access_token for Slack delivery (webhook cannot target specific channels)",
+        "Scheduled tasks require a Slack bot access_token; webhook delivery is not supported",
         "",
     )
 
