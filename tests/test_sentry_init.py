@@ -9,6 +9,8 @@ import pytest
 from app.constants import SENTRY_DSN, SENTRY_ERROR_SAMPLE_RATE, SENTRY_TRACES_SAMPLE_RATE
 from app.utils import sentry_sdk as sentry_mod
 
+_REAL_BUILD_INTEGRATIONS = sentry_mod._build_sentry_integrations
+
 
 @pytest.fixture(autouse=True)
 def _reset_sentry_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,10 +169,14 @@ def test_capture_exception_attaches_context(monkeypatch) -> None:
         ValueError("boom"),
         context="interactive_shell.cli_agent.stream",
         extra={"turn": 3},
+        tags={"surface": "interactive_shell"},
     )
 
     capture_mock.assert_called_once()
-    assert tags == {"opensre.context": "interactive_shell.cli_agent.stream"}
+    assert tags == {
+        "opensre.context": "interactive_shell.cli_agent.stream",
+        "surface": "interactive_shell",
+    }
     assert extras == {"turn": 3}
 
 
@@ -276,6 +282,33 @@ def test_before_send_filters_sensitive_extra_keys() -> None:
     assert event["extra"]["github_token"] == "[Filtered]"
     assert event["extra"]["api_key"] == "[Filtered]"
     assert event["extra"]["user_email"] == "user@example.com"
+
+
+def test_before_send_fingerprints_tool_errors_by_tool_name() -> None:
+    event = {"tags": {"tool": "grafana_logs"}, "message": "tool failed"}
+
+    sentry_mod._before_send(event, {})
+
+    assert event["fingerprint"] == ["tool-error", "grafana_logs", "{{ default }}"]
+
+
+def test_before_send_fingerprints_node_errors_by_node_name() -> None:
+    event = {"tags": {"node": "extract_alert"}, "message": "node failed"}
+
+    sentry_mod._before_send(event, {})
+
+    assert event["fingerprint"] == ["node-error", "extract_alert", "{{ default }}"]
+
+
+def test_before_send_prefers_tool_fingerprint_when_tool_and_node_tags_exist() -> None:
+    event = {
+        "tags": {"tool": "grafana_logs", "node": "investigate"},
+        "message": "tool failed inside node",
+    }
+
+    sentry_mod._before_send(event, {})
+
+    assert event["fingerprint"] == ["tool-error", "grafana_logs", "{{ default }}"]
 
 
 def test_before_send_scrubs_home_paths_in_stack_frames() -> None:
@@ -800,3 +833,25 @@ def test_init_sentry_ignore_errors_includes_keyboard_interrupt(monkeypatch) -> N
 
     ignore_errors = init_mock.call_args.kwargs["ignore_errors"]
     assert KeyboardInterrupt in ignore_errors
+
+
+def test_build_sentry_integrations_excludes_logging_when_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("OPENSRE_SENTRY_LOGGING_DISABLED", "1")
+
+    integrations = _REAL_BUILD_INTEGRATIONS()
+
+    integration_names = {type(i).__name__ for i in integrations}
+    assert "LoggingIntegration" not in integration_names
+    assert "AsyncioIntegration" in integration_names
+    assert "HttpxIntegration" in integration_names
+
+
+def test_build_sentry_integrations_includes_logging_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("OPENSRE_SENTRY_LOGGING_DISABLED", raising=False)
+
+    integrations = _REAL_BUILD_INTEGRATIONS()
+
+    integration_names = {type(i).__name__ for i in integrations}
+    assert "LoggingIntegration" in integration_names
+    assert "AsyncioIntegration" in integration_names
+    assert "HttpxIntegration" in integration_names
