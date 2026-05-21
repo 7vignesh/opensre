@@ -11,6 +11,7 @@ import requests
 
 from app.services._error_helpers import capture_service_error
 from app.services.grafana.config import GrafanaAccountConfig
+from app.utils.errors import report_exception
 
 logger = logging.getLogger(__name__)
 
@@ -255,11 +256,13 @@ class GrafanaClientBase:
             values: list[str] = data.get("data", [])
             return values
         except Exception as exc:
-            capture_service_error(
+            report_exception(
                 exc,
                 logger=logger,
-                integration="grafana",
-                method="query_loki_label_values",
+                message=f"[grafana] query_loki_label_values failed for label={label}",
+                severity="warning",
+                tags={"surface": "service_client", "integration": "grafana"},
+                include_traceback=False,
             )
             return []
 

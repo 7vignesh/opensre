@@ -6,16 +6,33 @@ import logging
 from typing import Any
 
 import httpx
+import requests
 
 from app.utils.errors import report_exception
 
 
 def _is_transient_vendor_error(exc: BaseException) -> bool:
-    if not isinstance(exc, httpx.HTTPStatusError):
-        return False
-    sc = exc.response.status_code
-    # 429 = vendor rate-limit (transient throttling, not a config error)
-    return sc == 429 or sc >= 500
+    """Return True for transient vendor errors (429 rate-limit, 5xx server errors).
+
+    Supports httpx.HTTPStatusError, requests.HTTPError, and any exception with
+    a ``resp`` attribute carrying a ``status`` field (e.g. googleapiclient.errors.HttpError).
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        sc = exc.response.status_code
+        return sc == 429 or sc >= 500
+
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        sc = exc.response.status_code
+        return sc == 429 or sc >= 500
+
+    # googleapiclient.errors.HttpError and similar: exc.resp.status
+    resp = getattr(exc, "resp", None)
+    if resp is not None:
+        status = getattr(resp, "status", None)
+        if isinstance(status, int):
+            return status == 429 or status >= 500
+
+    return False
 
 
 def capture_service_error(
