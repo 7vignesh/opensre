@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
+
+from app.services._error_helpers import capture_service_error
 
 if TYPE_CHECKING:
     from app.services.grafana.base import GrafanaClientBase
+
+logger = logging.getLogger(__name__)
 
 
 class MimirMixin:
@@ -64,6 +69,7 @@ class MimirMixin:
                 "account_id": self.account_id,
             }
         except Exception as e:
+            capture_service_error(e, logger=logger, integration="grafana", method="query_mimir")
             error_msg = str(e)
             response_text = ""
             if hasattr(e, "response") and e.response is not None:

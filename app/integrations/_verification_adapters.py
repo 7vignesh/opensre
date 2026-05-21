@@ -48,6 +48,7 @@ from app.services.splunk import SplunkClient, SplunkConfig
 from app.services.tracer_client.client import TracerClient
 from app.services.vercel.client import VercelClient, VercelConfig
 from app.services.victoria_logs import VictoriaLogsClient, VictoriaLogsConfig
+from app.utils.sentry_sdk import capture_exception
 
 VerifierFn = Callable[[str, dict[str, Any]], dict[str, str]]
 
@@ -118,6 +119,10 @@ def build_probe_verifier[ConfigT](
         try:
             probe_result = client_factory(normalized_config).probe_access()
         except Exception as err:
+            capture_exception(
+                err,
+                tags={"surface": "integration", "integration": service, "event": "probe_failed"},
+            )
             return result(service, source, "failed", str(err))
         return result(service, source, probe_result.status, probe_result.detail)
 
@@ -182,6 +187,10 @@ def _verify_grafana(source: str, config: dict[str, Any]) -> dict[str, str]:
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
+        capture_exception(
+            exc,
+            tags={"surface": "integration", "integration": "grafana", "event": "verify_failed"},
+        )
         return result("grafana", source, "failed", f"Datasource discovery failed: {exc}")
 
     datasources = payload if isinstance(payload, list) else []
@@ -214,6 +223,10 @@ def _verify_aws(source: str, config: dict[str, Any]) -> dict[str, str]:
         sts_client, region, mode = _build_sts_client(config)
         identity = sts_client.get_caller_identity()
     except Exception as exc:
+        capture_exception(
+            exc,
+            tags={"surface": "integration", "integration": "aws", "event": "verify_failed"},
+        )
         return result("aws", source, "failed", f"AWS STS check failed: {exc}")
 
     account = str(identity.get("Account", "")).strip()
@@ -256,6 +269,10 @@ def _verify_slack(
         response = httpx.post(webhook_url, json=payload, timeout=10.0)
         response.raise_for_status()
     except Exception as exc:
+        capture_exception(
+            exc,
+            tags={"surface": "integration", "integration": "slack", "event": "verify_failed"},
+        )
         return result("slack", source, "failed", f"Webhook delivery failed: {exc}")
     return result("slack", source, "passed", "Webhook delivered test message successfully.")
 
@@ -269,6 +286,10 @@ def _verify_tracer(source: str, config: dict[str, Any]) -> dict[str, str]:
     try:
         org_id = extract_org_id_from_jwt(tracer_config.jwt_token)
     except Exception as err:
+        capture_exception(
+            err,
+            tags={"surface": "integration", "integration": "tracer", "event": "jwt_decode_failed"},
+        )
         return result("tracer", source, "failed", f"JWT decode failed: {err}")
     if not org_id:
         return result("tracer", source, "failed", "JWT did not contain an org identifier.")
@@ -281,6 +302,10 @@ def _verify_tracer(source: str, config: dict[str, Any]) -> dict[str, str]:
         )
         integrations = tracer_client.get_all_integrations()
     except Exception as err:
+        capture_exception(
+            err,
+            tags={"surface": "integration", "integration": "tracer", "event": "verify_failed"},
+        )
         return result("tracer", source, "failed", f"Tracer API check failed: {err}")
 
     return result(
@@ -312,6 +337,10 @@ def _verify_discord(source: str, config: dict[str, Any]) -> dict[str, str]:
         detail = str(err)
         if "run() cannot be called from a running event loop" in detail:
             return result("discord", source, "passed", "Discord bot token accepted.")
+        capture_exception(
+            err,
+            tags={"surface": "integration", "integration": "discord", "event": "verify_failed"},
+        )
         return result("discord", source, "failed", f"Discord API check failed: {err}")
     return result("discord", source, "passed", "Discord bot token accepted.")
 
@@ -326,6 +355,10 @@ def _verify_telegram(source: str, config: dict[str, Any]) -> dict[str, str]:
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
+        capture_exception(
+            exc,
+            tags={"surface": "integration", "integration": "telegram", "event": "verify_failed"},
+        )
         return result("telegram", source, "failed", f"Telegram API check failed: {exc}")
 
     if not payload.get("ok"):
@@ -363,6 +396,10 @@ def _verify_whatsapp(source: str, config: dict[str, Any]) -> dict[str, str]:
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
+        capture_exception(
+            exc,
+            tags={"surface": "integration", "integration": "whatsapp", "event": "verify_failed"},
+        )
         return result("whatsapp", source, "failed", f"Twilio API check failed: {exc}")
 
     friendly_name = str(payload.get("friendly_name", "")).strip()
@@ -398,6 +435,10 @@ def _verify_twilio(source: str, config: dict[str, Any]) -> dict[str, str]:
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
+        capture_exception(
+            exc,
+            tags={"surface": "integration", "integration": "twilio", "event": "verify_failed"},
+        )
         return result("twilio", source, "failed", f"Twilio API check failed: {exc}")
 
     friendly_name = str(payload.get("friendly_name", "")).strip() or account_sid

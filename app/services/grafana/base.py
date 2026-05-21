@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import requests
 
+from app.services._error_helpers import capture_service_error
 from app.services.grafana.config import GrafanaAccountConfig
 
 logger = logging.getLogger(__name__)
@@ -236,7 +237,9 @@ class GrafanaClientBase:
             logger.info("[grafana] Discovered datasource UIDs: %s", result)
             return result
         except Exception as e:
-            logger.warning("[grafana] Failed to discover datasource UIDs: %s", e)
+            capture_service_error(
+                e, logger=logger, integration="grafana", method="discover_datasource_uids"
+            )
             return {}
 
     def query_loki_label_values(self, label: str = "service_name") -> list[str]:
@@ -251,8 +254,13 @@ class GrafanaClientBase:
             data = self._make_request(url)
             values: list[str] = data.get("data", [])
             return values
-        except Exception:
-            logger.debug("Failed to fetch Loki label values for %s", label, exc_info=True)
+        except Exception as exc:
+            capture_service_error(
+                exc,
+                logger=logger,
+                integration="grafana",
+                method="query_loki_label_values",
+            )
             return []
 
     def query_alert_rules(self, folder: str | None = None) -> list[dict[str, Any]]:
@@ -289,7 +297,9 @@ class GrafanaClientBase:
                         )
             return rules
         except Exception as e:
-            logger.warning("[grafana] Failed to query alert rules: %s", e)
+            capture_service_error(
+                e, logger=logger, integration="grafana", method="query_alert_rules"
+            )
             return []
 
     def _get_auth_headers(self) -> dict[str, str]:

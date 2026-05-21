@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from app.integrations.models import GoogleDocsIntegrationConfig
 from app.integrations.probes import ProbeResult
+from app.services._error_helpers import capture_service_error
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ def _handle_google_api_error(exc: Exception, operation: str) -> dict[str, Any]:
         elif status_code:
             error_msg = f"HTTP {status_code} error while {operation}: {exc}"
 
-    logger.error("Google API error during %s: %s", operation, exc)
+    capture_service_error(exc, logger=logger, integration="google_docs", method=operation)
     return {
         "success": False,
         "error": error_msg,

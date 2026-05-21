@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
+from app.services._error_helpers import capture_service_error
 from app.utils.errors import report_exception
 
 if TYPE_CHECKING:
@@ -76,6 +77,7 @@ class TempoMixin:
                 "account_id": self.account_id,
             }
         except Exception as e:
+            capture_service_error(e, logger=logger, integration="grafana", method="query_tempo")
             error_msg = str(e)
             response_text = ""
             if hasattr(e, "response") and e.response is not None:
