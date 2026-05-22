@@ -34,4 +34,3 @@ def test_cron_logs_rejects_non_positive_limit() -> None:
     result = runner.invoke(cron_command, ["logs", "task-123", "--limit", "0"])
     assert result.exit_code != 0
     assert "not in the range" in result.output
-

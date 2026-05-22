@@ -95,6 +95,12 @@ _MCP_BY_COMMAND: dict[str, _SlashMcpFields] = {
         "Show token usage and estimated session cost for LLM calls in this REPL session.",
         "User asks about token usage, cost, or spend in the current session",
     ),
+    "/cron": _mcp(
+        "Manage cron-driven scheduled deliveries. "
+        "Subcommands: list, add, remove <id>, run <id>, logs <id>.",
+        "User asks to list, add, remove, run, or view logs for scheduled delivery tasks",
+        anti_examples=("User asks about one-off messaging without a schedule (use /messaging)",),
+    ),
     "/doctor": _mcp(
         "Run a full local environment diagnostic and print pass/warn/fail per check.",
         "User asks for environment diagnostics, setup validation, or doctor check",
