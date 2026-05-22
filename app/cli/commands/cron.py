@@ -65,10 +65,10 @@ def cron_command() -> None:
 @click.option(
     "--window",
     "window_hours",
-    type=int,
+    type=click.IntRange(min=1),
     default=24,
     show_default=True,
-    help="Lookback window in hours for the report.",
+    help="Lookback window in hours for the report (must be >= 1).",
 )
 def cron_add(
     kind: str,
@@ -171,7 +171,11 @@ def cron_run(task_id: str) -> None:
 @cron_command.command(name="logs")
 @click.argument("task_id")
 @click.option(
-    "--limit", type=int, default=20, show_default=True, help="Max number of runs to show."
+    "--limit",
+    type=click.IntRange(min=1),
+    default=20,
+    show_default=True,
+    help="Max number of runs to show (must be >= 1).",
 )
 def cron_logs(task_id: str, limit: int) -> None:
     """Show execution history for a scheduled task."""

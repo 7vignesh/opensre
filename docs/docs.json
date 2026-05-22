@@ -81,6 +81,7 @@
               "masking",
               "interactive-shell-privacy",
               "agents",
+              "cron",
               "multi-instance-integrations"
             ]
           },
