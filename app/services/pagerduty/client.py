@@ -181,7 +181,12 @@ class PagerDutyClient:
                     }
                 )
 
-            return {"success": True, "log_entries": log_entries, "total": len(log_entries)}
+            return {
+                "success": True,
+                "log_entries": log_entries,
+                "total": len(log_entries),
+                "has_more": data.get("more", False),
+            }
         except httpx.HTTPStatusError as exc:
             capture_service_error(
                 exc,
