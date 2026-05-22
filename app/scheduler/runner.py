@@ -33,14 +33,7 @@ def _make_trigger(task: ScheduledTask) -> Any:
         raise ValueError(f"Invalid cron expression (need 5 fields): {task.cron!r}")
 
     try:
-        trigger = CronTrigger(
-            minute=parts[0],
-            hour=parts[1],
-            day=parts[2],
-            month=parts[3],
-            day_of_week=parts[4],
-            timezone=task.timezone,
-        )
+        trigger = CronTrigger.from_crontab(task.cron, timezone=task.timezone)
     except (ValueError, TypeError, KeyError) as exc:
         raise ValueError(f"Invalid cron/timezone for task {task.id}: {exc}") from exc
     return trigger
