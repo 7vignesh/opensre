@@ -26,6 +26,7 @@ DEFAULT_OPSGENIE_BASE_URLS: dict[str, str] = {
     "us": "https://api.opsgenie.com",
     "eu": "https://api.eu.opsgenie.com",
 }
+DEFAULT_PAGERDUTY_BASE_URL = "https://api.pagerduty.com"
 DEFAULT_INCIDENT_IO_BASE_URL = "https://api.incident.io"
 
 
@@ -204,6 +205,33 @@ class OpsGenieIntegrationConfig(StrictConfigModel):
         return {
             "Authorization": f"GenieKey {self.api_key}",
             "Content-Type": "application/json",
+        }
+
+
+class PagerDutyIntegrationConfig(StrictConfigModel):
+    """Normalized PagerDuty credentials used by resolution and verification flows."""
+
+    api_key: str
+    base_url: str = DEFAULT_PAGERDUTY_BASE_URL
+    integration_id: str = ""
+
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def _normalize_base_url(cls, value: object) -> str:
+        raw = str(value or "").strip()
+        return raw if raw else DEFAULT_PAGERDUTY_BASE_URL
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _normalize_api_key(cls, value: object) -> str:
+        return normalize_str()(value)
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Token token={self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.pagerduty+json;version=2",
         }
 
 

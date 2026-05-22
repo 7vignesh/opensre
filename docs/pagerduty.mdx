@@ -1,0 +1,100 @@
+---
+title: "PagerDuty"
+description: "Connect PagerDuty so OpenSRE can read active incidents and escalation context during investigations"
+---
+
+OpenSRE queries PagerDuty to retrieve active incidents and their details — correlating on-call incidents with infrastructure events and investigation findings.
+
+## Prerequisites
+
+- PagerDuty account
+- REST API key with read access (General Access or read-only scoped OAuth token)
+
+## Setup
+
+### Option 1: Interactive CLI
+
+```bash
+opensre integrations setup
+```
+
+Select **PagerDuty** when prompted and provide your API key.
+
+### Option 2: Environment variables
+
+Add to your `.env`:
+
+```bash
+PAGERDUTY_API_KEY=your-api-key
+PAGERDUTY_API_BASE_URL=https://api.pagerduty.com  # optional, defaults to this
+```
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PAGERDUTY_API_KEY` | — | **Required.** PagerDuty REST API key |
+| `PAGERDUTY_API_BASE_URL` | `https://api.pagerduty.com` | API base URL (override only for EU or custom domains) |
+
+### Option 3: Persistent store
+
+```json
+{
+  "version": 1,
+  "integrations": [
+    {
+      "id": "pagerduty-prod",
+      "service": "pagerduty",
+      "status": "active",
+      "credentials": {
+        "api_key": "your-api-key",
+        "base_url": "https://api.pagerduty.com"
+      }
+    }
+  ]
+}
+```
+
+## Creating an API key
+
+1. In PagerDuty, go to **Integrations** → **Developer Tools** → **API Access Keys**
+2. Click **Create New API Key**
+3. Add a description like `opensre-read-only`
+4. Copy the generated key
+
+<Info>
+PagerDuty API keys are account-level and grant access to all data the account can see. Use a read-only key for OpenSRE.
+</Info>
+
+## Verify
+
+```bash
+opensre integrations verify pagerduty
+```
+
+Expected output:
+
+```
+Service: pagerduty
+Status: passed
+Detail: Connected to PagerDuty; API key accepted (https://api.pagerduty.com)
+```
+
+## Available tools
+
+| Tool | Description |
+| --- | --- |
+| `pagerduty_incidents` | List/search incidents by status, urgency, service, or time window |
+| `pagerduty_incident_detail` | Fetch incident detail plus log entries, notes, and escalation context |
+
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| **401 Unauthorized** | Check the API key — ensure it is a valid REST API key (not an Events API key) |
+| **403 Forbidden** | The API key may lack required permissions; use a full-access read-only key |
+| **429 Rate limited** | PagerDuty enforces rate limits; reduce query frequency |
+
+## Security best practices
+
+- Use a **read-only API key** — PagerDuty supports scoped OAuth tokens for granular access.
+- Store the API key in `.env`, not in source code.
+- Rotate keys periodically and revoke unused keys from the PagerDuty console.

@@ -105,6 +105,7 @@
               "honeycomb",
               "incident_io",
               "opsgenie",
+              "pagerduty",
               "sentry",
               "signoz",
               "splunk"

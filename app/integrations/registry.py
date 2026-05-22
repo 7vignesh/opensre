@@ -33,6 +33,7 @@ from app.integrations._verification_adapters import (
     _verify_openobserve,
     _verify_opensearch,
     _verify_opsgenie,
+    _verify_pagerduty,
     _verify_postgresql,
     _verify_rabbitmq,
     _verify_sentry,
@@ -192,6 +193,12 @@ INTEGRATION_SPECS: tuple[IntegrationSpec, ...] = (
         verifier=_verify_opsgenie,
         direct_effective=True,
         verify_order=21,
+    ),
+    IntegrationSpec(
+        service="pagerduty",
+        verifier=_verify_pagerduty,
+        direct_effective=True,
+        verify_order=22,
     ),
     IntegrationSpec(
         service="incident_io",

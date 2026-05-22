@@ -927,6 +927,8 @@ _TOOLS_WITHOUT_DELIBERATE_CATCH: frozenset[str] = frozenset(
         "list_sentry_issue_events",
         "opsgenie_alert_detail",
         "opsgenie_alerts",
+        "pagerduty_incident_detail",
+        "pagerduty_incidents",
         "prefect_flow_runs",
         "prefect_worker_health",
         "query_betterstack_logs",

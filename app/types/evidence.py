@@ -28,6 +28,7 @@ EvidenceSource = Literal[
     "google_docs",
     "vercel",
     "opsgenie",
+    "pagerduty",
     "incident_io",
     "jira",
     "elasticsearch",

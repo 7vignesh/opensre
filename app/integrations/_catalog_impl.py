@@ -28,6 +28,7 @@ from app.integrations.config_models import (
     IncidentIoIntegrationConfig,
     JiraIntegrationConfig,
     OpsGenieIntegrationConfig,
+    PagerDutyIntegrationConfig,
     SlackWebhookConfig,
     SplunkIntegrationConfig,
     TelegramBotConfig,
@@ -470,6 +471,22 @@ def _classify_service_instance(
             return None, None
         if opsgenie_config.api_key:
             return opsgenie_config.model_dump(), "opsgenie"
+        return None, None
+
+    if key == "pagerduty":
+        try:
+            pagerduty_config = PagerDutyIntegrationConfig.model_validate(
+                {
+                    "api_key": credentials.get("api_key", ""),
+                    "base_url": credentials.get("base_url", ""),
+                    "integration_id": record_id,
+                }
+            )
+        except Exception as exc:
+            _report_classify_failure(exc, integration=key, record_id=record_id)
+            return None, None
+        if pagerduty_config.api_key:
+            return pagerduty_config.model_dump(), "pagerduty"
         return None, None
 
     if key == "incident_io":
@@ -1365,6 +1382,25 @@ def load_env_integrations() -> list[dict[str, Any]]:
                 _active_env_record(
                     "opsgenie",
                     opsgenie_config.model_dump(exclude={"integration_id"}),
+                )
+            )
+
+    pagerduty_api_key = os.getenv("PAGERDUTY_API_KEY", "").strip()
+    if pagerduty_api_key:
+        try:
+            pagerduty_config = PagerDutyIntegrationConfig.model_validate(
+                {
+                    "api_key": pagerduty_api_key,
+                    "base_url": os.getenv("PAGERDUTY_API_BASE_URL", "").strip(),
+                }
+            )
+        except Exception as exc:
+            _report_env_loader_failure(exc, integration="pagerduty")
+        else:
+            integrations.append(
+                _active_env_record(
+                    "pagerduty",
+                    pagerduty_config.model_dump(exclude={"integration_id"}),
                 )
             )
 
