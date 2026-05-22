@@ -243,14 +243,7 @@ def _validate_cron_and_timezone(cron_expr: str, timezone: str) -> None:
     try:
         from apscheduler.triggers.cron import CronTrigger
 
-        CronTrigger(
-            minute=parts[0],
-            hour=parts[1],
-            day=parts[2],
-            month=parts[3],
-            day_of_week=parts[4],
-            timezone=timezone,
-        )
+        CronTrigger.from_crontab(cron_expr, timezone=timezone)
     except (ValueError, TypeError, KeyError) as exc:
         _console.print(f"[red]Error: invalid cron expression or timezone: {exc}[/red]")
         raise SystemExit(1) from exc
