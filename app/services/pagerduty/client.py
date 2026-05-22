@@ -100,7 +100,12 @@ class PagerDutyClient:
             for inc in data.get("incidents", []):
                 incidents.append(self._normalize_incident(inc))
 
-            return {"success": True, "incidents": incidents, "total": len(incidents)}
+            return {
+                "success": True,
+                "incidents": incidents,
+                "total": len(incidents),
+                "has_more": data.get("more", False),
+            }
         except httpx.HTTPStatusError as exc:
             capture_service_error(
                 exc,
@@ -323,5 +328,5 @@ def make_pagerduty_client(
         return None
     try:
         return PagerDutyClient(PagerDutyConfig(api_key=token, base_url=base_url or ""))
-    except Exception:
+    except (ValueError, TypeError):
         return None

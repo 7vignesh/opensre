@@ -143,7 +143,8 @@ class PagerDutyIncidentsTool(BaseTool):
             "available": True,
             "incidents": incidents,
             "open_incidents": open_incidents,
-            "total": len(incidents),
+            "total": result.get("total", len(incidents)),
+            "has_more": result.get("has_more", False),
         }
 
 

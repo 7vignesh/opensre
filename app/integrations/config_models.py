@@ -218,8 +218,7 @@ class PagerDutyIntegrationConfig(StrictConfigModel):
     @field_validator("base_url", mode="before")
     @classmethod
     def _normalize_base_url(cls, value: object) -> str:
-        raw = str(value or "").strip()
-        return raw if raw else DEFAULT_PAGERDUTY_BASE_URL
+        return normalize_url(DEFAULT_PAGERDUTY_BASE_URL)(value)
 
     @field_validator("api_key", mode="before")
     @classmethod

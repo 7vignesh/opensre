@@ -302,12 +302,18 @@ class TestPagerDutyIncidentsTool:
 
         monkeypatch.setattr(
             "app.services.pagerduty.client.PagerDutyClient.list_incidents",
-            lambda _self, **_kwargs: {"success": True, "incidents": fake_incidents, "total": 2},
+            lambda _self, **_kwargs: {
+                "success": True,
+                "incidents": fake_incidents,
+                "total": 2,
+                "has_more": False,
+            },
         )
 
         result = tool.run(api_key="test-key")
         assert result["available"] is True
         assert result["total"] == 2
+        assert result["has_more"] is False
         assert len(result["open_incidents"]) == 1
         assert result["open_incidents"][0]["id"] == "P1"
 

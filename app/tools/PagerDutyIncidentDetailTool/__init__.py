@@ -69,7 +69,6 @@ class PagerDutyIncidentDetailTool(BaseTool):
         return {
             "api_key": pd.get("api_key", ""),
             "base_url": pd.get("base_url", ""),
-            "incident_id": pd.get("incident_id", ""),
             "include_log_entries": True,
             "include_notes": True,
             "log_limit": 25,
