@@ -1,9 +1,9 @@
 """APScheduler-backed blocking runner for scheduled tasks.
 
 Loads all enabled tasks from the store, creates CronTrigger jobs, and
-blocks until SIGINT/SIGTERM. APScheduler 3.x auto-injects
-``scheduled_run_time`` into job callbacks that declare it as a parameter,
-giving us the correct fire time for dedup without listeners or shared state.
+blocks until SIGINT/SIGTERM. Fire times for dedup come from
+``JobSubmissionEvent.scheduled_run_times[0]`` (UTC, minute precision),
+not wall-clock time inside the callback.
 """
 
 from __future__ import annotations
@@ -19,6 +19,10 @@ from app.scheduler.store import get_task, list_tasks, update_task
 from app.scheduler.types import ScheduledTask
 
 logger = logging.getLogger(__name__)
+
+# Populated by EVENT_JOB_SUBMITTED before each job runs (job_id -> fire_time).
+_pending_fire_times: dict[str, str] = {}
+_pending_fire_times_lock = threading.Lock()
 
 
 def _make_trigger(task: ScheduledTask) -> Any:
@@ -50,14 +54,27 @@ def _compute_fire_time(scheduled_run_time: Any) -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ")
 
 
-def _scheduled_job(task_id: str, scheduled_run_time: datetime | None = None) -> None:
-    """Job callback invoked by APScheduler on each cron tick.
+def _on_job_submitted(event: Any) -> None:
+    """Capture the intended fire time for this tick before the job callback runs."""
+    run_times = getattr(event, "scheduled_run_times", None)
+    if run_times:
+        fire_time = _compute_fire_time(run_times[0])
+    else:
+        fire_time = datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ")
+    with _pending_fire_times_lock:
+        _pending_fire_times[event.job_id] = fire_time
 
-    APScheduler 3.x auto-injects ``scheduled_run_time`` (the intended fire
-    time for this tick) into any job function that declares it as a kwarg.
-    This gives us the correct dedup key without listeners or shared state.
-    """
-    fire_time = _compute_fire_time(scheduled_run_time)
+
+def _scheduled_job(task_id: str) -> None:
+    """Job callback invoked by APScheduler on each cron tick."""
+    with _pending_fire_times_lock:
+        fire_time = _pending_fire_times.pop(task_id, None)
+    if fire_time is None:
+        logger.warning(
+            "No scheduled fire_time for task %s; using UTC now (listener may have missed)",
+            task_id,
+        )
+        fire_time = datetime.now(UTC).strftime("%Y-%m-%dT%H:%MZ")
 
     task = get_task(task_id)
     if task is None:
@@ -80,9 +97,12 @@ def start_scheduler() -> None:
     Blocks until SIGINT or SIGTERM. Invalid tasks (bad cron, bad timezone)
     are logged and skipped rather than crashing the entire daemon.
     """
+    from apscheduler.events import EVENT_JOB_SUBMITTED
     from apscheduler.schedulers.blocking import BlockingScheduler
 
     scheduler = BlockingScheduler()
+    scheduler.add_listener(_on_job_submitted, EVENT_JOB_SUBMITTED)
+
     tasks = list_tasks()
     enabled_count = 0
 
@@ -117,7 +137,6 @@ def start_scheduler() -> None:
         logger.warning("No enabled tasks found. Scheduler has nothing to run.")
         raise SystemExit("No enabled tasks found. Add tasks with `opensre cron add` first.")
 
-    # Install shutdown handlers
     stop_event = threading.Event()
 
     def _shutdown_handler(_signum: int, _frame: Any) -> None:

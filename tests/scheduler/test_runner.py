@@ -6,7 +6,13 @@ from unittest.mock import patch
 
 import pytest
 
-from app.scheduler.runner import _compute_fire_time, _make_trigger, run_task_now
+from app.scheduler.runner import (
+    _compute_fire_time,
+    _make_trigger,
+    _on_job_submitted,
+    _pending_fire_times,
+    run_task_now,
+)
 from app.scheduler.types import Provider, ScheduledTask, TaskKind
 
 
@@ -60,6 +66,20 @@ class TestMakeTrigger:
         )
         trigger = _make_trigger(task)
         assert trigger is not None
+
+
+class TestOnJobSubmitted:
+    def test_stores_fire_time_from_scheduled_run_times(self) -> None:
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        _pending_fire_times.clear()
+        event = SimpleNamespace(
+            job_id="task-1",
+            scheduled_run_times=[datetime(2026, 1, 15, 9, 0, tzinfo=UTC)],
+        )
+        _on_job_submitted(event)
+        assert _pending_fire_times["task-1"] == "2026-01-15T09:00Z"
 
 
 class TestComputeFireTime:

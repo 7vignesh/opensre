@@ -91,7 +91,7 @@ Cron expressions are validated at `cron add` time using APScheduler's `CronTrigg
 
 The scheduler uses a SQLite-backed claim store with a `UNIQUE(task_id, fire_time)` constraint:
 
-1. When a cron tick fires, the job computes a UTC-normalized `fire_time` from APScheduler's `scheduled_run_time`
+1. When a cron tick fires, `EVENT_JOB_SUBMITTED` captures `scheduled_run_times[0]` and the job uses that UTC-normalized `fire_time` for the claim key
 2. The executor attempts an `INSERT OR IGNORE` into the claim table
 3. If the insert succeeds (rowcount = 1), this instance won the claim and delivers
 4. If the insert is ignored (rowcount = 0), another instance already claimed it — skip
