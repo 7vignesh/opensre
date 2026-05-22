@@ -134,6 +134,40 @@ class TestMessageBuilders:
         with pytest.raises(RuntimeError, match="Custom investigation failed"):
             tasks_mod._build_custom_investigation(task)
 
+    def test_daily_summary_pipeline_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        task = ScheduledTask(
+            kind=TaskKind.DAILY_SUMMARY,
+            cron="0 9 * * *",
+            provider=Provider.TELEGRAM,
+            chat_id="-100",
+            window_hours=24,
+        )
+
+        def _raise(_payload: object, **_kwargs: object) -> dict[str, str]:
+            raise RuntimeError("pipeline down")
+
+        monkeypatch.setattr("app.pipeline.runners.run_investigation", _raise)
+
+        with pytest.raises(RuntimeError, match="Daily summary failed"):
+            tasks_mod.build_message(task)
+
+    def test_weekly_audit_pipeline_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        task = ScheduledTask(
+            kind=TaskKind.WEEKLY_AUDIT,
+            cron="0 8 * * 1",
+            provider=Provider.SLACK,
+            chat_id="C123",
+            window_hours=168,
+        )
+
+        def _raise(_payload: object, **_kwargs: object) -> dict[str, str]:
+            raise RuntimeError("pipeline down")
+
+        monkeypatch.setattr("app.pipeline.runners.run_investigation", _raise)
+
+        with pytest.raises(RuntimeError, match="Weekly audit failed"):
+            tasks_mod.build_message(task)
+
     def test_custom_investigation_strips_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify credential keys are not passed to the investigation pipeline."""
         task = ScheduledTask(
