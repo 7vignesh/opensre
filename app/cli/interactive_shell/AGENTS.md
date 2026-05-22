@@ -54,6 +54,21 @@ owning area rather than adding more logic to the caller.
 
 - Add commands as `SlashCommand` entries in the relevant `command_registry/*`
   module. Keep handlers small: parse args, call focused helpers, render result.
+- **REPL + CLI parity (required):** Every command in `SLASH_COMMANDS` must have a
+  matching `_MCP_BY_COMMAND` entry in
+  `command_registry/slash_catalog.py`. That catalog feeds LLM routing (`slash_invoke`),
+  planner tool specs, and compact help text. Without it, CI fails
+  (`test_slash_catalog_covers_all_registered_commands`).
+  - **New REPL-only slash command:** add `SlashCommand` in the owning
+    `command_registry/*` module **and** `_mcp(...)` in `slash_catalog.py` (keep
+    keys sorted alphabetically in `_MCP_BY_COMMAND`).
+  - **New CLI with REPL parity:** add the Click command under `app/cli/commands/`,
+    register a `SlashCommand` in `command_registry/cli_parity.py` (subprocess to
+    `opensre …`), **and** add `_MCP_BY_COMMAND` in `slash_catalog.py` with
+    `llm_description`, `use_cases`, and `anti_examples` aligned to the command’s
+    `usage` tuple.
+  - **Verify before push:**
+    `uv run python -m pytest tests/cli/interactive_shell/command_registry/test_slash_catalog.py -q`
 - Always assign the correct `ExecutionTier`:
   - `EXEMPT`: only meta commands that must never prompt, such as exit/trust
     controls.
@@ -190,3 +205,5 @@ Before considering an interactive-shell change complete, check:
 4. Are external inputs bounded, escaped, redacted, and timeout-protected?
 5. Do background resources shut down deterministically?
 6. Are focused tests added or updated under `tests/cli/interactive_shell/`?
+7. If `SLASH_COMMANDS` changed, does `slash_catalog.py` include every command
+   (REPL and `cli_parity`)? Run `test_slash_catalog.py`.

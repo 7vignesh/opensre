@@ -18,8 +18,19 @@ _MIN_LLM_DESCRIPTION_LEN = 20
 
 
 def test_slash_catalog_covers_all_registered_commands() -> None:
-    assert len(_MCP_BY_COMMAND) == len(SLASH_COMMANDS)
-    assert set(_MCP_BY_COMMAND) == set(SLASH_COMMANDS.keys())
+    registered = set(SLASH_COMMANDS.keys())
+    catalogued = set(_MCP_BY_COMMAND)
+    missing = sorted(registered - catalogued)
+    stale = sorted(catalogued - registered)
+    assert not missing, (
+        "Add _MCP_BY_COMMAND entries in app/cli/interactive_shell/command_registry/"
+        f"slash_catalog.py for: {missing}. See app/cli/interactive_shell/AGENTS.md "
+        "(Slash commands → REPL + CLI parity)."
+    )
+    assert not stale, (
+        "Remove stale _MCP_BY_COMMAND keys from slash_catalog.py (no longer in "
+        f"SLASH_COMMANDS): {stale}"
+    )
     specs = build_slash_command_specs()
     assert len(specs) == len(SLASH_COMMANDS)
 
