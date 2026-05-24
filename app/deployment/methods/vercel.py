@@ -291,8 +291,17 @@ def deploy_to_vercel(
                     suggestion="Check the Vercel dashboard for details.",
                 )
 
-            deployment_id = result["body"].get("id", "")
-            deployment_url = f"https://{result['body'].get('url', '')}"
+            deployment_id: str = result["body"].get("id", "")
+            deployment_url_host: str = result["body"].get("url", "")
+
+            if not deployment_id or not deployment_url_host:
+                return VercelDeployError(
+                    message="Vercel API response missing deployment ID or URL.",
+                    suggestion="The API returned an unexpected response shape. "
+                    "Check the Vercel dashboard for deployment status.",
+                )
+
+            deployment_url = f"https://{deployment_url_host}"
 
             # 3. Wait for READY
             state = _wait_for_ready(client, deployment_id, headers, params)
