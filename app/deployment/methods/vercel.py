@@ -257,6 +257,9 @@ def _wait_for_ready(
                 return state
             if state in ("ERROR", "CANCELED"):
                 return state
+        elif resp.status_code in (401, 403, 404):
+            # Fast-fail on permanent client errors — retrying won't help.
+            return f"HTTP_{resp.status_code}"
 
         if attempt < max_attempts - 1:
             time.sleep(poll_interval)
