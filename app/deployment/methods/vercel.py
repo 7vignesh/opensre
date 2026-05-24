@@ -179,6 +179,10 @@ def _ensure_project(
         protection_ok = _disable_deployment_protection(client, project_id, headers, params)
         return project_id, protection_ok
 
+    if resp.status_code != 404:
+        resp.raise_for_status()
+        return None, False
+
     resp_create = client.post(
         f"{_VERCEL_API_BASE}/v10/projects",
         headers=headers,
