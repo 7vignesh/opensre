@@ -4,8 +4,12 @@ The previous CLI-specific deployment methods have been removed. This package now
 contains reusable operations around an already-defined hosted service: HTTP
 health polling, local persisted EC2 outputs, and provider config validation for
 dry runs.
+
+The methods subpackage provides deploy implementations for supported targets
+(e.g. Vercel).
 """
 
+from app.deployment.methods import deploy_to_vercel
 from app.deployment.operations import (
     HealthPollStatus,
     ProviderValidationResult,
@@ -22,6 +26,7 @@ from app.deployment.operations import (
 
 __all__ = [
     "delete_remote_outputs",
+    "deploy_to_vercel",
     "dry_run_provider_validation",
     "get_remote_outputs_path",
     "HealthPollStatus",

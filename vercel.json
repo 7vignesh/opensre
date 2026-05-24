@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/health.py", "use": "@vercel/python" },
+    { "src": "api/ok.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/health", "dest": "/api/health.py" },
+    { "src": "/api/health", "dest": "/api/health.py" },
+    { "src": "/ok", "dest": "/api/ok.py" },
+    { "src": "/api/ok", "dest": "/api/ok.py" }
+  ]
+}
