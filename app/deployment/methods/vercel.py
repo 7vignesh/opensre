@@ -63,7 +63,6 @@ class VercelDeployError:
 _HEALTH_HANDLER = """\
 from http.server import BaseHTTPRequestHandler
 import json
-import os
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):

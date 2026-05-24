@@ -274,6 +274,10 @@ def _cmd_debug(session: ReplSession, console: Console, args: list[str]) -> bool:
     return run_cli_command(console, ["debug", *args])
 
 
+def _cmd_deploy(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
+    return run_cli_command(console, ["deploy", *args], capture_output=True)
+
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand(
         "/onboard",
@@ -373,5 +377,12 @@ COMMANDS: list[SlashCommand] = [
         "run targeted runtime diagnostics",
         _cmd_debug,
         execution_tier=ExecutionTier.SAFE,
+    ),
+    SlashCommand(
+        "/deploy",
+        "Deploy OpenSRE to a supported platform like Vercel.",
+        _cmd_deploy,
+        usage=("/deploy --target vercel", "/deploy --target vercel --dry-run"),
+        execution_tier=ExecutionTier.ELEVATED,
     ),
 ]
