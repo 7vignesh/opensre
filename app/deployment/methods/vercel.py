@@ -328,9 +328,7 @@ def deploy_to_vercel(
     try:
         with httpx.Client(timeout=60) as client:
             # 1. Ensure project exists
-            project_id, protection_disabled = _ensure_project(
-                client, project_name, headers, params
-            )
+            project_id, protection_disabled = _ensure_project(client, project_name, headers, params)
             if project_id is None:
                 return VercelDeployError(
                     message="Failed to create or access Vercel project.",
