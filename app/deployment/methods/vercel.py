@@ -105,6 +105,31 @@ def _team_params(team_id: str) -> dict[str, str]:
     return {}
 
 
+def _disable_deployment_protection(
+    client: httpx.Client,
+    project_id: str,
+    headers: dict[str, str],
+    params: dict[str, str],
+) -> None:
+    """Disable Vercel's SSO/Deployment Protection so endpoints are publicly accessible.
+
+    Team-scoped projects have deployment protection enabled by default, which
+    causes health check requests to receive 401/403 instead of reaching the
+    serverless function.
+    """
+    try:
+        client.patch(
+            f"{_VERCEL_API_BASE}/v9/projects/{project_id}",
+            headers=headers,
+            json={"ssoProtection": None},
+            params=params,
+        )
+    except httpx.HTTPError:
+        # Non-fatal: protection disable is best-effort. The deploy still
+        # succeeds; only the automated health check may fail for team projects.
+        logger.debug("Could not disable deployment protection for project %s", project_id)
+
+
 def _ensure_project(
     client: httpx.Client,
     project_name: str,
@@ -119,6 +144,7 @@ def _ensure_project(
     )
     if resp.status_code == 200:
         project_id: str = resp.json()["id"]
+        _disable_deployment_protection(client, project_id, headers, params)
         return project_id
 
     resp_create = client.post(
@@ -129,6 +155,7 @@ def _ensure_project(
     )
     if resp_create.status_code in (200, 201):
         created_id: str = resp_create.json()["id"]
+        _disable_deployment_protection(client, created_id, headers, params)
         return created_id
 
     if resp_create.status_code == 403:

@@ -275,7 +275,10 @@ def _cmd_debug(session: ReplSession, console: Console, args: list[str]) -> bool:
 
 
 def _cmd_deploy(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
-    return run_cli_command(console, ["deploy", *args], capture_output=True)
+    # deploy has an interactive click.confirm() prompt when --yes is not passed;
+    # capture_output=True would swallow that prompt and hang. Let the subprocess
+    # inherit the TTY so the user can see and respond to the confirmation.
+    return run_cli_command(console, ["deploy", *args])
 
 
 COMMANDS: list[SlashCommand] = [
