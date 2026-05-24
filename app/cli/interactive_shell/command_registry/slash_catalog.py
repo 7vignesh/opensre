@@ -278,6 +278,10 @@ _MCP_BY_COMMAND: dict[str, _SlashMcpFields] = {
         "User asks to run a debug check or diagnostic",
         anti_examples=("User asks a general debugging or troubleshooting question",),
     ),
+    "/deploy": _mcp(
+        "Deploy OpenSRE to a supported platform (e.g. Vercel for lightweight workloads).",
+        "User asks to deploy OpenSRE to Vercel or another platform",
+    ),
 }
 
 
