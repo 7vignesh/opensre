@@ -48,6 +48,7 @@ class VercelDeployResult:
     project_name: str
     state: str
     elapsed_seconds: float
+    protection_disabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -110,24 +111,51 @@ def _disable_deployment_protection(
     project_id: str,
     headers: dict[str, str],
     params: dict[str, str],
-) -> None:
+) -> bool:
     """Disable Vercel's SSO/Deployment Protection so endpoints are publicly accessible.
 
     Team-scoped projects have deployment protection enabled by default, which
     causes health check requests to receive 401/403 instead of reaching the
     serverless function.
+
+    Returns:
+        True if protection was successfully disabled (or not present).
+        False if the request failed due to permissions or network errors.
     """
     try:
-        client.patch(
+        resp = client.patch(
             f"{_VERCEL_API_BASE}/v9/projects/{project_id}",
             headers=headers,
             json={"ssoProtection": None},
             params=params,
         )
-    except httpx.HTTPError:
-        # Non-fatal: protection disable is best-effort. The deploy still
-        # succeeds; only the automated health check may fail for team projects.
-        logger.debug("Could not disable deployment protection for project %s", project_id)
+        if resp.status_code == 200:
+            logger.debug("Deployment protection disabled for project %s", project_id)
+            return True
+        if resp.status_code in (401, 403):
+            logger.warning(
+                "Could not disable deployment protection for project %s "
+                "(HTTP %d — token may lack project-patch permissions). "
+                "The health check may fail with 401/403 for team-scoped projects.",
+                project_id,
+                resp.status_code,
+            )
+            return False
+        logger.debug(
+            "Deployment protection disable returned HTTP %d for project %s",
+            resp.status_code,
+            project_id,
+        )
+        # Non-200 but not a clear auth failure — treat as uncertain
+        return resp.status_code < 400
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "Network error disabling deployment protection for project %s: %s. "
+            "The health check may fail for team-scoped projects.",
+            project_id,
+            exc,
+        )
+        return False
 
 
 def _ensure_project(
@@ -135,8 +163,12 @@ def _ensure_project(
     project_name: str,
     headers: dict[str, str],
     params: dict[str, str],
-) -> str | None:
-    """Create the Vercel project if it doesn't exist. Returns project ID."""
+) -> tuple[str | None, bool]:
+    """Create the Vercel project if it doesn't exist.
+
+    Returns:
+        Tuple of (project_id, protection_disabled). project_id is None on failure.
+    """
     resp = client.get(
         f"{_VERCEL_API_BASE}/v9/projects/{project_name}",
         headers=headers,
@@ -144,8 +176,8 @@ def _ensure_project(
     )
     if resp.status_code == 200:
         project_id: str = resp.json()["id"]
-        _disable_deployment_protection(client, project_id, headers, params)
-        return project_id
+        protection_ok = _disable_deployment_protection(client, project_id, headers, params)
+        return project_id, protection_ok
 
     resp_create = client.post(
         f"{_VERCEL_API_BASE}/v10/projects",
@@ -155,14 +187,14 @@ def _ensure_project(
     )
     if resp_create.status_code in (200, 201):
         created_id: str = resp_create.json()["id"]
-        _disable_deployment_protection(client, created_id, headers, params)
-        return created_id
+        protection_ok = _disable_deployment_protection(client, created_id, headers, params)
+        return created_id, protection_ok
 
     if resp_create.status_code == 403:
-        return None
+        return None, False
 
     resp_create.raise_for_status()
-    return None
+    return None, False
 
 
 def _create_deployment(
@@ -296,7 +328,9 @@ def deploy_to_vercel(
     try:
         with httpx.Client(timeout=60) as client:
             # 1. Ensure project exists
-            project_id = _ensure_project(client, project_name, headers, params)
+            project_id, protection_disabled = _ensure_project(
+                client, project_name, headers, params
+            )
             if project_id is None:
                 return VercelDeployError(
                     message="Failed to create or access Vercel project.",
@@ -348,6 +382,7 @@ def deploy_to_vercel(
             project_name=project_name,
             state=state,
             elapsed_seconds=elapsed,
+            protection_disabled=protection_disabled,
         )
 
     if state == "TIMEOUT":

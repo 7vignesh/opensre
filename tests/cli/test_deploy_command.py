@@ -160,6 +160,7 @@ def test_deploy_vercel_health_timeout_is_warning(
         project_name="opensre",
         state="READY",
         elapsed_seconds=10.0,
+        protection_disabled=True,
     )
     mock_health.side_effect = TimeoutError("timed out")
 
@@ -168,3 +169,28 @@ def test_deploy_vercel_health_timeout_is_warning(
     # Deploy itself succeeded, health timeout is just a warning
     assert result.exit_code == 0
     assert "warming up" in result.output.lower() or "60s" in result.output
+
+
+@patch.dict("os.environ", {"VERCEL_API_TOKEN": "tok_test"}, clear=True)
+@patch("app.deployment.operations.health.poll_deployment_health")
+@patch("app.deployment.methods.vercel.deploy_to_vercel")
+def test_deploy_vercel_health_timeout_protection_active(
+    mock_deploy: MagicMock, mock_health: MagicMock
+) -> None:
+    """Health check timeout with active protection shows actionable diagnostic."""
+    mock_deploy.return_value = VercelDeployResult(
+        deployment_id="dpl_123",
+        url="https://opensre.vercel.app",
+        project_name="opensre",
+        state="READY",
+        elapsed_seconds=10.0,
+        protection_disabled=False,
+    )
+    mock_health.side_effect = TimeoutError("timed out")
+
+    runner = CliRunner()
+    result = runner.invoke(deploy_command, ["--target", "vercel", "--yes"])
+    # Deploy itself succeeded, but user gets actionable protection warning
+    assert result.exit_code == 0
+    assert "Deployment Protection" in result.output
+    assert "project-patch permissions" in result.output or "Dashboard" in result.output

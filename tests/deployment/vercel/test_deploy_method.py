@@ -116,6 +116,10 @@ class TestDeployToVercelFull:
         project_resp.status_code = 200
         project_resp.json.return_value = {"id": "prj_123"}
 
+        # _disable_deployment_protection: success
+        protection_resp = MagicMock()
+        protection_resp.status_code = 200
+
         # _create_deployment: success
         deploy_resp = MagicMock()
         deploy_resp.status_code = 200
@@ -127,6 +131,7 @@ class TestDeployToVercelFull:
         ready_resp.json.return_value = {"readyState": "READY"}
 
         mock_client.get.side_effect = [project_resp, ready_resp]
+        mock_client.patch.return_value = protection_resp
         mock_client.post.return_value = deploy_resp
 
         result = deploy_to_vercel(api_token="tok_valid", project_name="my-project")
@@ -135,6 +140,7 @@ class TestDeployToVercelFull:
         assert result.url == "https://opensre-xyz.vercel.app"
         assert result.state == "READY"
         assert result.project_name == "my-project"
+        assert result.protection_disabled is True
 
     @patch("app.deployment.methods.vercel.time.sleep", return_value=None)
     @patch("app.deployment.methods.vercel.httpx.Client")
@@ -150,12 +156,17 @@ class TestDeployToVercelFull:
         project_resp.status_code = 200
         project_resp.json.return_value = {"id": "prj_123"}
 
+        # _disable_deployment_protection: success
+        protection_resp = MagicMock()
+        protection_resp.status_code = 200
+
         # _create_deployment: 403
         deploy_resp = MagicMock()
         deploy_resp.status_code = 403
         deploy_resp.json.return_value = {"error": {"message": "not allowed"}}
 
         mock_client.get.return_value = project_resp
+        mock_client.patch.return_value = protection_resp
         mock_client.post.return_value = deploy_resp
 
         result = deploy_to_vercel(api_token="tok_limited")
@@ -176,6 +187,10 @@ class TestDeployToVercelFull:
         project_resp.status_code = 200
         project_resp.json.return_value = {"id": "prj_123"}
 
+        # _disable_deployment_protection: success
+        protection_resp = MagicMock()
+        protection_resp.status_code = 200
+
         # _create_deployment: success
         deploy_resp = MagicMock()
         deploy_resp.status_code = 200
@@ -187,6 +202,7 @@ class TestDeployToVercelFull:
         error_resp.json.return_value = {"readyState": "ERROR"}
 
         mock_client.get.side_effect = [project_resp, error_resp]
+        mock_client.patch.return_value = protection_resp
         mock_client.post.return_value = deploy_resp
 
         result = deploy_to_vercel(api_token="tok_valid")
@@ -228,3 +244,41 @@ class TestDeployToVercelFull:
         result = deploy_to_vercel(api_token="tok_valid")
         assert isinstance(result, VercelDeployError)
         assert "Network error" in result.message
+
+    @patch("app.deployment.methods.vercel.time.sleep", return_value=None)
+    @patch("app.deployment.methods.vercel.httpx.Client")
+    def test_protection_disable_failure_propagates(
+        self, mock_client_cls: MagicMock, _mock_sleep: MagicMock
+    ) -> None:
+        """When protection disable gets 403, result.protection_disabled is False."""
+        mock_client = MagicMock()
+        mock_client_cls.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        # _ensure_project: project exists
+        project_resp = MagicMock()
+        project_resp.status_code = 200
+        project_resp.json.return_value = {"id": "prj_team"}
+
+        # _disable_deployment_protection: 403 (token lacks permissions)
+        protection_resp = MagicMock()
+        protection_resp.status_code = 403
+
+        # _create_deployment: success
+        deploy_resp = MagicMock()
+        deploy_resp.status_code = 200
+        deploy_resp.json.return_value = {"id": "dpl_team", "url": "opensre-team.vercel.app"}
+
+        # _wait_for_ready: READY
+        ready_resp = MagicMock()
+        ready_resp.status_code = 200
+        ready_resp.json.return_value = {"readyState": "READY"}
+
+        mock_client.get.side_effect = [project_resp, ready_resp]
+        mock_client.patch.return_value = protection_resp
+        mock_client.post.return_value = deploy_resp
+
+        result = deploy_to_vercel(api_token="tok_limited_perms")
+        assert isinstance(result, VercelDeployResult)
+        assert result.state == "READY"
+        assert result.protection_disabled is False

@@ -159,10 +159,26 @@ def _deploy_vercel(*, project: str, dry_run: bool, yes: bool) -> None:
                 f"(status {health.status_code}, {health.elapsed_seconds:.1f}s)[/]"
             )
         except TimeoutError:
-            console.print(
-                f"[{WARNING}]Health check did not pass within 60s. "
-                f"The deployment may still be warming up.[/]"
-            )
+            if not result.protection_disabled:
+                console.print(
+                    f"[{WARNING}]Health check failed — Vercel Deployment Protection "
+                    f"is likely still active.[/]"
+                )
+                console.print(
+                    f"[{SECONDARY}]Your token lacks permission to disable SSO/Deployment "
+                    f"Protection. Team-scoped projects block unauthenticated requests "
+                    f"(401/403) by default.[/]"
+                )
+                console.print(
+                    f"[{SECONDARY}]Fix: disable Deployment Protection manually in "
+                    f"Vercel Dashboard → Project Settings → Deployment Protection, "
+                    f"or use a token with project-patch permissions.[/]"
+                )
+            else:
+                console.print(
+                    f"[{WARNING}]Health check did not pass within 60s. "
+                    f"The deployment may still be warming up.[/]"
+                )
             console.print(f"[{SECONDARY}]Try: curl {result.url}/health[/]")
 
     console.print()
