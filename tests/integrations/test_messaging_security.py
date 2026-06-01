@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from app.integrations.messaging_security import (
     _MAX_PAIRING_ATTEMPTS,
     _PAIRING_CODE_TTL_SECONDS,
@@ -13,6 +15,7 @@ from app.integrations.messaging_security import (
     RejectionBehavior,
     authorize_inbound_message,
     complete_pairing,
+    complete_pairing_with_persistence,
     generate_pairing_code,
     hash_pairing_code,
     verify_pairing_code,
@@ -340,6 +343,167 @@ class TestCompletePairing:
         assert success is False
         assert "expired" in message.lower()
         assert policy.pairing_secret_hash is None
+
+
+# ---------------------------------------------------------------------------
+# Persistence-aware pairing wrapper tests
+# ---------------------------------------------------------------------------
+
+
+class _FakePolicyStore:
+    """In-memory stand-in for a durable identity-policy store.
+
+    Simulates a real persistence boundary: callers mutate a loaded policy,
+    then must write it back. ``load`` always returns a fresh object parsed
+    from the last saved snapshot, so any mutation that was not persisted is
+    lost across a load — exactly the failure mode the wrapper must prevent.
+    """
+
+    def __init__(self, policy: MessagingIdentityPolicy) -> None:
+        self._snapshot = policy.model_dump(mode="json")
+        self.save_calls = 0
+
+    def load(self) -> MessagingIdentityPolicy:
+        return MessagingIdentityPolicy.model_validate(self._snapshot)
+
+    def save(self, policy: MessagingIdentityPolicy) -> None:
+        self.save_calls += 1
+        self._snapshot = policy.model_dump(mode="json")
+
+
+class TestCompletePairingWithPersistence:
+    def test_persists_on_success(self) -> None:
+        code = "OK0001"
+        store = _FakePolicyStore(
+            MessagingIdentityPolicy(
+                inbound_enabled=True,
+                pairing_secret_hash=hash_pairing_code(code),
+                pairing_created_at=time.time(),
+            )
+        )
+        policy = store.load()
+        success, _ = complete_pairing_with_persistence(
+            policy=policy, user_id="new_user", code=code, persist=store.save
+        )
+        assert success is True
+        assert store.save_calls == 1
+        # Reload from the store: the successful pairing is durable.
+        reloaded = store.load()
+        assert "new_user" in reloaded.allowed_user_ids
+        assert reloaded.pairing_secret_hash is None
+
+    def test_persists_on_failed_attempt(self) -> None:
+        """A wrong code must persist the incremented counter, not just on success."""
+        store = _FakePolicyStore(
+            MessagingIdentityPolicy(
+                inbound_enabled=True,
+                pairing_secret_hash=hash_pairing_code("CORRECT"),
+                pairing_created_at=time.time(),
+            )
+        )
+        policy = store.load()
+        success, _ = complete_pairing_with_persistence(
+            policy=policy, user_id="attacker", code="WRONG1", persist=store.save
+        )
+        assert success is False
+        assert store.save_calls == 1
+        # The increment survived the round-trip through the store.
+        assert store.load().pairing_attempts == 1
+
+    def test_brute_force_invalidated_across_reload_boundaries(self) -> None:
+        """Drive failed attempts each on a freshly loaded policy.
+
+        This is the core regression for issue #2677: each attempt loads a
+        fresh policy from the store (as a stateless request handler would),
+        mutates it, and persists via the wrapper. The counter must accumulate
+        and the code must be invalidated after _MAX_PAIRING_ATTEMPTS — proving
+        protection does not depend on the caller reusing one in-memory object.
+        """
+        store = _FakePolicyStore(
+            MessagingIdentityPolicy(
+                inbound_enabled=True,
+                pairing_secret_hash=hash_pairing_code("SECRET"),
+                pairing_created_at=time.time(),
+            )
+        )
+        for i in range(_MAX_PAIRING_ATTEMPTS):
+            policy = store.load()  # stateless reload before each attempt
+            success, _ = complete_pairing_with_persistence(
+                policy=policy, user_id="attacker", code=f"WRONG{i}", persist=store.save
+            )
+            assert success is False
+
+        final = store.load()
+        assert final.pairing_secret_hash is None
+        # A subsequent guess with the (now cleared) code cannot succeed.
+        success, message = complete_pairing_with_persistence(
+            policy=store.load(), user_id="attacker", code="SECRET", persist=store.save
+        )
+        assert success is False
+        assert "no pairing" in message.lower()
+
+    def test_naive_persist_only_on_success_would_defeat_protection(self) -> None:
+        """Contrast test: persisting only on success never invalidates the code.
+
+        Documents the exact footgun the wrapper removes. Using bare
+        complete_pairing and skipping persistence on failure, a fresh reload
+        each attempt resets pairing_attempts, so the code is never invalidated.
+        """
+        store = _FakePolicyStore(
+            MessagingIdentityPolicy(
+                inbound_enabled=True,
+                pairing_secret_hash=hash_pairing_code("SECRET"),
+                pairing_created_at=time.time(),
+            )
+        )
+        for i in range(_MAX_PAIRING_ATTEMPTS * 3):
+            policy = store.load()
+            success, _ = complete_pairing(policy=policy, user_id="attacker", code=f"WRONG{i}")
+            assert success is False
+            # Naive caller: only persists on success → nothing saved here.
+
+        # Counter never accumulated; code is still live and brute-forceable.
+        assert store.load().pairing_attempts == 0
+        assert store.load().pairing_secret_hash is not None
+
+    def test_persist_called_when_complete_pairing_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """persist runs even if the inner call raises (finally semantics)."""
+        import app.integrations.messaging_security as ms
+
+        calls: list[str] = []
+
+        def boom(_policy: MessagingIdentityPolicy) -> None:
+            calls.append("persisted")
+
+        def raising(**_kwargs: object) -> tuple[bool, str]:
+            raise RuntimeError("inner failure")
+
+        monkeypatch.setattr(ms, "complete_pairing", raising)
+
+        policy = MessagingIdentityPolicy(inbound_enabled=True)
+        with pytest.raises(RuntimeError, match="inner failure"):
+            complete_pairing_with_persistence(policy=policy, user_id="u", code="X", persist=boom)
+
+        assert calls == ["persisted"]
+
+    def test_persist_failure_is_raised_not_swallowed(self) -> None:
+        """If the persist callback fails, the error must propagate."""
+        code = "OK0002"
+        policy = MessagingIdentityPolicy(
+            inbound_enabled=True,
+            pairing_secret_hash=hash_pairing_code(code),
+            pairing_created_at=time.time(),
+        )
+
+        def failing_persist(_policy: MessagingIdentityPolicy) -> None:
+            raise OSError("disk full")
+
+        with pytest.raises(OSError, match="disk full"):
+            complete_pairing_with_persistence(
+                policy=policy, user_id="u", code=code, persist=failing_persist
+            )
 
 
 # ---------------------------------------------------------------------------

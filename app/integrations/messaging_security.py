@@ -19,6 +19,7 @@ import os
 import secrets
 import string
 import time
+from collections.abc import Callable
 from enum import StrEnum
 
 from pydantic import Field
@@ -279,10 +280,14 @@ def complete_pairing(
     attempts, the pairing code is invalidated. Codes also expire after
     PAIRING_CODE_TTL_SECONDS.
 
-    IMPORTANT: The caller MUST persist the updated policy after every call,
-    regardless of the return value. Failed attempts increment
-    pairing_attempts; if the caller only persists on success, the counter
-    resets on the next load and brute-force protection is defeated.
+    This function mutates ``policy`` in place (incrementing
+    ``pairing_attempts`` on failure, clearing the secret on success or
+    invalidation) but does NOT persist it. The mutation is only durable if
+    the updated policy is written back to storage after every call. Callers
+    SHOULD use :func:`complete_pairing_with_persistence` so persistence is
+    guaranteed structurally rather than by convention — if persistence is
+    skipped on failed attempts, the counter resets on the next load and
+    brute-force protection is silently defeated.
     """
     if not policy.pairing_secret_hash:
         return False, "No pairing is pending. Ask the operator to run `opensre messaging pair`."
@@ -326,6 +331,52 @@ def complete_pairing(
 
     logger.info("DM pairing completed for user %s", user_id)
     return True, "Pairing successful! You can now interact with the bot."
+
+
+def complete_pairing_with_persistence(
+    *,
+    policy: MessagingIdentityPolicy,
+    user_id: str,
+    code: str,
+    persist: Callable[[MessagingIdentityPolicy], None],
+) -> tuple[bool, str]:
+    """Run :func:`complete_pairing` and guarantee the policy is persisted.
+
+    This is the preferred entry point for any inbound handler. It makes
+    brute-force protection a structural property of the code path rather
+    than a caller convention: ``persist`` is invoked in a ``finally`` block,
+    so the mutated ``policy`` (including a failed-attempt increment) is
+    written back on success, on failure, AND when ``complete_pairing`` or
+    ``persist`` itself raises. This closes the footgun where persisting only
+    on success would reset ``pairing_attempts`` on the next load and defeat
+    the brute-force limit.
+
+    Args:
+        policy: The identity policy to mutate. Modified in place.
+        user_id: Platform-native stable user ID attempting to pair.
+        code: The pairing code supplied by the user.
+        persist: Callback that durably writes ``policy`` back to storage.
+            Invoked exactly once, after the attempt is evaluated, regardless
+            of outcome. A failure inside ``persist`` is logged and re-raised
+            so the caller is not misled into thinking the counter was saved.
+
+    Returns:
+        The ``(success, message)`` tuple from :func:`complete_pairing`.
+    """
+    try:
+        return complete_pairing(policy=policy, user_id=user_id, code=code)
+    finally:
+        try:
+            persist(policy)
+        except Exception:
+            # Surface persistence failures loudly: a silently dropped write
+            # would re-open the brute-force window the wrapper exists to close.
+            logger.exception(
+                "Failed to persist messaging identity policy after pairing attempt "
+                "for user %s; brute-force counter may not be durable",
+                user_id,
+            )
+            raise
 
 
 # ---------------------------------------------------------------------------
