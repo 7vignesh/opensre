@@ -505,6 +505,39 @@ class TestCompletePairingWithPersistence:
                 policy=policy, user_id="u", code=code, persist=failing_persist
             )
 
+    def test_double_failure_persist_replaces_original_with_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When both complete_pairing and persist raise, persist wins but original is __context__.
+
+        Python's finally semantics mean the persist exception replaces the
+        in-flight complete_pairing exception. The original is preserved as
+        __context__ so it remains visible in tracebacks. This test documents
+        that behavior explicitly (Greptile P2 review feedback).
+        """
+        import app.integrations.messaging_security as ms
+
+        def raising_pairing(**_kwargs: object) -> tuple[bool, str]:
+            raise ValueError("pairing logic exploded")
+
+        def raising_persist(_policy: MessagingIdentityPolicy) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(ms, "complete_pairing", raising_pairing)
+
+        policy = MessagingIdentityPolicy(inbound_enabled=True)
+
+        # The persist exception is what surfaces to the caller.
+        with pytest.raises(OSError, match="disk full") as exc_info:
+            complete_pairing_with_persistence(
+                policy=policy, user_id="u", code="X", persist=raising_persist
+            )
+
+        # The original pairing exception is preserved as __context__.
+        assert exc_info.value.__context__ is not None
+        assert isinstance(exc_info.value.__context__, ValueError)
+        assert "pairing logic exploded" in str(exc_info.value.__context__)
+
 
 # ---------------------------------------------------------------------------
 # Platform enum tests
