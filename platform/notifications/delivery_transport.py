@@ -118,6 +118,7 @@ def post_form(
         if isinstance(parsed, dict):
             parsed_data = parsed
     except Exception:
+        # non-JSON body is permitted; fall through with empty data
         pass
 
     return DeliveryResponse(
